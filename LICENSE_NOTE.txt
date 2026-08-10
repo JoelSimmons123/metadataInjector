@@ -1,0 +1,1 @@
+This project does not redistribute ExifTool. Download ExifTool separately from its official site: https://exiftool.org/
