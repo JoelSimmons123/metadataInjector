@@ -2422,30 +2422,82 @@ class MainWindow(QMainWindow):
         exe = self.exif_edit.text().strip()
         image_ref = self.reference_for_kind('image')
         video_ref = self.reference_for_kind('video')
+
         if not exe or not Path(exe).exists():
-            QMessageBox.warning(self, 'ExifTool required', 'Choose exiftool.exe first. The README includes the official download instructions.')
+            QMessageBox.warning(
+                self, 'ExifTool required',
+                'Choose exiftool.exe first. The README includes the official download instructions.'
+            )
             return None
+
         if not self.targets:
             QMessageBox.warning(self, 'No targets', 'Drag in at least one broken image or video.')
             return None
-        if any(image_ref and Path(x).resolve() == Path(image_ref).resolve() for x in self.targets) or any(video_ref and Path(x).resolve() == Path(video_ref).resolve() for x in self.targets):
-            QMessageBox.warning(self, 'Reference included', 'A reference file cannot also be one of the repair targets.')
+
+        # A reference must never also be processed as a target.
+        target_paths = {Path(x).resolve() for x in self.targets}
+        if image_ref and Path(image_ref).resolve() in target_paths:
+            QMessageBox.warning(self, 'Reference included', 'The image reference cannot also be one of the repair targets.')
             return None
+        if video_ref and Path(video_ref).resolve() in target_paths:
+            QMessageBox.warning(self, 'Reference included', 'The video reference cannot also be one of the repair targets.')
+            return None
+
         image_targets = [x for x in self.targets if is_image_path(x)]
         video_targets = [x for x in self.targets if is_video_path(x)]
+
+        if image_targets and (not image_ref or not Path(image_ref).is_file()):
+            QMessageBox.warning(
+                self, 'Image reference required',
+                'Choose the known-good image reference before repairing image targets.'
+            )
+            return None
+
+        if video_targets and (not video_ref or not Path(video_ref).is_file()):
+            QMessageBox.warning(
+                self, 'Video reference required',
+                'Choose the known-good video reference before repairing video targets.'
+            )
+            return None
+
+        return exe, image_ref, video_ref
+
+    def start_repair(self):
+        valid = self.validate()
+        if not valid:
+            return
+
+        exe, image_ref, video_ref = valid
+        output = self.output_edit.text().strip()
+        if not self.replace_box.isChecked() and not output:
+            QMessageBox.warning(self, 'Output required', 'Choose an output folder.')
+            return
+
+        image_targets = [x for x in self.targets if is_image_path(x)]
+        video_targets = [x for x in self.targets if is_video_path(x)]
+
         if video_targets:
             response = QMessageBox.question(
                 self, 'Video metadata mode',
-                'Video repair copies writable QuickTime/iPhone device/location metadata such as make/model/software and GPS from your selected video reference. The target video\'s own creation/modify/track/media timestamps are preserved and reference dates are never injected.\n\n'
+                'Video repair copies writable QuickTime/iPhone device/location metadata such as make/model/software and GPS from your selected video reference. '
+                'The target video\'s own creation/modify/track/media timestamps are preserved and reference dates are never injected.\n\n'
                 'It intentionally keeps each target video\'s real resolution, duration, frame rate, codec, rotation, HDR signalling, audio layout and media tracks. '
                 'Those are structural facts, not metadata that should be cloned from another video.\n\nContinue?',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
             )
             if response != QMessageBox.Yes:
                 return
+
         if image_targets and image_ref:
             ref_ext = Path(image_ref).suffix.lower()
-            cross_targets = [Path(x).name for x in image_targets if not (Path(x).suffix.lower() == ref_ext or {Path(x).suffix.lower(), ref_ext} <= {'.jpg', '.jpeg'})]
+            cross_targets = [
+                Path(x).name for x in image_targets
+                if not (
+                    Path(x).suffix.lower() == ref_ext
+                    or {Path(x).suffix.lower(), ref_ext} <= {'.jpg', '.jpeg'}
+                )
+            ]
             if cross_targets:
                 preview = ', '.join(cross_targets[:3]) + ('…' if len(cross_targets) > 3 else '')
                 response = QMessageBox.question(
@@ -2453,7 +2505,8 @@ class MainWindow(QMainWindow):
                     f'The image reference is {ref_ext.upper().lstrip(".")} but {len(cross_targets)} image target(s) use another format ({preview}).\n\n'
                     'The app will map compatible metadata into the target format instead of preserving HEIC/JPEG/PNG-specific container groups. '
                     'Some source-format-only fields cannot exist in the destination format.\n\nContinue?',
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
                 )
                 if response != QMessageBox.Yes:
                     return
@@ -2462,22 +2515,39 @@ class MainWindow(QMainWindow):
             response = QMessageBox.question(
                 self, 'Replace originals?',
                 'This will modify the original files after creating .metadatarepair_backup copies.\n\nContinue?',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
             )
-            if response != QMessageBox.Yes: return
+            if response != QMessageBox.Yes:
+                return
 
-        self.results = []; self.log_box.clear(); self.repair_btn.setEnabled(False)
-        self.compare_btn.setEnabled(False); self.open_output_btn.setEnabled(False)
-        self.progress.setMaximum(len(self.targets)); self.progress.setValue(0)
-        self.run_status.setText('Preparing repair…'); self.result_summary.setText(f'0 / {len(self.targets)} complete')
+        self.results = []
+        self.log_box.clear()
+        self.repair_btn.setEnabled(False)
+        self.compare_btn.setEnabled(False)
+        self.open_output_btn.setEnabled(False)
+        self.progress.setMaximum(len(self.targets))
+        self.progress.setValue(0)
+        self.run_status.setText('Preparing repair…')
+        self.result_summary.setText(f'0 / {len(self.targets)} complete')
         self.set_badge(self.top_status, 'WORKING', 'warn')
+
         self.log_box.appendPlainText(f'Image reference: {image_ref or "(none)"}')
         self.log_box.appendPlainText(f'Video reference: {video_ref or "(none)"}')
         self.log_box.appendPlainText(f'Targets: {len(self.targets)}')
-        self.log_box.appendPlainText(f'Mode: {"Replace originals + backup" if self.replace_box.isChecked() else "Safe copies"}')
+        self.log_box.appendPlainText(
+            f'Mode: {"Replace originals + backup" if self.replace_box.isChecked() else "Safe copies"}'
+        )
         self.log_box.appendPlainText('')
 
-        self.worker = RepairWorker(exe, image_ref, video_ref, list(self.targets), output, self.replace_box.isChecked())
+        self.worker = RepairWorker(
+            exe,
+            image_ref,
+            video_ref,
+            list(self.targets),
+            output,
+            self.replace_box.isChecked()
+        )
         self.worker.log.connect(self.log_box.appendPlainText)
         self.worker.progress.connect(self.on_progress)
         self.worker.finished_ok.connect(self.on_finished)

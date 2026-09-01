@@ -1,8 +1,13 @@
-# Metadata Repair Tool v2.5
+# Metadata Repair Tool v2.5.1.1
+
+
+## v2.5.1 hotfix
+
+Fixes a startup crash where the Repair button referenced a missing `start_repair` method. No repair rules were intentionally changed.
 
 Native Windows desktop tool for repairing image and video metadata from trusted references while keeping destination-specific facts truthful.
 
-## New in v2.5
+## New in v2.5.1
 
 ### Dual references stay loaded at the same time
 Choose one **image reference** and one **video reference**. Mixed batches are routed automatically:
@@ -74,7 +79,7 @@ Image metadata is cloned from the image reference while target-specific layout s
 Place the official Windows ExifTool files beside `app.py` before building:
 
 ```text
-MetadataRepairTool_v2.5\
+MetadataRepairTool_v2.5.1\
   app.py
   exiftool.exe
   exiftool_files\
