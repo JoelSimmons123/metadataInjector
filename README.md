@@ -1,44 +1,90 @@
-# Metadata Repair Tool v2.2
+# Metadata Repair Tool v2.5
 
-Native Windows desktop tool for repairing image and video metadata from a trusted reference while keeping destination-specific facts truthful.
+Native Windows desktop tool for repairing image and video metadata from trusted references while keeping destination-specific facts truthful.
 
-## v2.2 video rules
+## New in v2.5
 
-Video timestamps now belong to the **target**, not the reference.
+### Dual references stay loaded at the same time
+Choose one **image reference** and one **video reference**. Mixed batches are routed automatically:
 
-The app copies reference-owned device/location metadata such as Apple make, model, software, GPS/location accuracy and the Apple full-frame-rate playback-intent key. It does **not** copy the reference video's creation, modification, track or media dates.
+- image targets → image reference
+- video targets → video reference
 
-For each target video, v2.2:
+Each queued file now shows its routing directly in the list, for example:
 
-- preserves its existing QuickTime movie `CreateDate` / `ModifyDate`
-- preserves its track `TrackCreateDate` / `TrackModifyDate`
-- preserves its `MediaCreateDate` / `MediaModifyDate`
-- restores target date fields inside Keys/XMP/UserData/ItemList if stripping temporarily removes them
-- does not invent reference dates when the target had no embedded date
-- preserves filesystem access/modified times and, on Windows, restores the source file's Creation/Access/Write FILETIMEs to the repaired copy
-- preserves codec, resolution, frame rate, duration, rotation, HDR/Dolby Vision signalling, audio layout and all encoded media streams
-- SHA-256 verifies the QuickTime/MP4 `mdat` media payload before and after repair
+```text
+photo.png
+IMAGE REF → IMG_1234.HEIC
 
-### Native Apple playback-intent representation
+clip.mp4
+VIDEO REF → IMG_5678.MOV
+```
 
-ExifTool may create `com.apple.quicktime.full-frame-rate-playback-intent` as a UTF-8 value when adding it to an MP4. v2.2 performs an in-place post-write normalisation so its QuickTime `data` atom uses native signed-integer type **21**, matching the iPhone-style representation. Atom sizes are not changed, and the result is verified before success is reported.
+If a required reference has not been selected yet, the queue says `not selected`.
 
-## Image rules
+### AI Fingerprint Audit
+Two audit controls are available:
 
-Image behaviour from v1.6 remains: reference metadata is cloned while orientation/dimensions stay truthful to the target, stale HEIC-only auxiliary XMP references are removed on cross-format PNG output, and encoded image data is not intentionally recompressed.
+- **Audit selected** — audit the currently selected queued file
+- **Audit any file** — choose any supported media file without adding it to the repair queue
+
+The audit reports:
+
+- direct AI-related metadata strings
+- possible C2PA / Content Credentials-style metadata markers
+- EXIF, XMP, ICC and MakerNotes presence
+- PNG metadata chunks
+- basic device/software/container information
+- sparse/stripped metadata footprints
+
+It also shows an **AI marker signal** from `0–100` with labels such as `NONE FOUND`, `LOW`, `MEDIUM`, `HIGH`, or `INCONCLUSIVE`.
+
+Important: the score measures the strength of **observable metadata/provenance markers only**. It is not a probability that the media is AI-generated, and a score of zero does not prove that a file is non-AI.
+
+
+### Default output folder
+Safe-copy mode now defaults to a `Repaired` folder beside the running app. For example:
+
+```text
+C:\Tools\MetadataRepairTool\MetadataRepairTool.exe
+C:\Tools\MetadataRepairTool\Repaired\
+```
+
+The folder is created automatically when a repair is run. You can still choose a different output folder with **Browse**.
+
+## Video behaviour
+
+Target video timestamps belong to the **target**, not the reference. The app preserves the target's existing creation/modify/track/media timestamps and never invents reference timestamps when they were absent.
+
+It also preserves the target's codec, resolution, frame rate, duration, rotation, HDR/Dolby Vision signalling, audio layout and encoded streams. The MP4/MOV `mdat` payload is SHA-256 checked before and after repair.
+
+The video reference supplies only the intended reference-owned metadata such as Apple make/model/software, GPS/location accuracy and supported Apple QuickTime keys.
+
+## Image behaviour
+
+Image metadata is cloned from the image reference while target-specific layout stays truthful:
+
+- target orientation is preserved
+- target dimensions are preserved
+- stale HEIC-only auxiliary XMP is removed from cross-format PNG output
+- image data is not intentionally recompressed
 
 ## Setup
 
 Place the official Windows ExifTool files beside `app.py` before building:
 
 ```text
-MetadataRepairTool_v2.2\
+MetadataRepairTool_v2.5\
   app.py
   exiftool.exe
   exiftool_files\
   build_exe.bat
 ```
 
-Run `build_exe.bat`, then launch the EXE under `dist\MetadataRepairTool\`.
+Run `build_exe.bat`, then launch the EXE under:
+
+```text
+dist\MetadataRepairTool\MetadataRepairTool.exe
+```
 
 Keep **Safe copies** enabled while testing.

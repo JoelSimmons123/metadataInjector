@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# ExifTool
+exiftool.exe
+exiftool(-k).exe
+exiftool_files/
+
+# Generated repaired media
+Repaired/
+*.metadatarepair_backup
+
+# Personal / test media
+*.heic
+*.heif
+*.mov
+*.mp4
+*.m4v
+*.avi
+*.mkv
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.avif
+
+# Archives
+*.zip
+*.7z
+*.rar
+
+# Temp / logs
+*.log
+*.tmp
+*.bak
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/

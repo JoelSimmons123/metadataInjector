@@ -24,6 +24,14 @@ IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.heic', '.heif
 VIDEO_EXTS = {'.mov', '.mp4', '.m4v'}
 MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
 
+AI_MARKER_TERMS = (
+    'midjourney', 'dall-e', 'dalle', 'stable diffusion', 'sdxl', 'automatic1111',
+    'comfyui', 'invokeai', 'fooocus', 'civitai', 'flux', 'openai', 'chatgpt',
+    'krea', 'higgsfield', 'seedance', 'leonardo', 'ideogram', 'firefly',
+    'dreamstudio', 'stability ai'
+)
+C2PA_HINTS = ('c2pa', 'jumbf', 'manifest', 'contentcredentials', 'content credentials')
+
 # Groups that describe the physical file / decoded pixels rather than portable metadata.
 IGNORE_GROUP_PREFIXES = ('File:', 'System:', 'Composite:')
 IGNORE_KEYS = {'ExifTool:ExifToolVersion'}
@@ -993,6 +1001,140 @@ def media_kind(path: str | Path) -> str:
     return 'video' if is_video_path(path) else 'image'
 
 
+def is_image_path(path: str | Path) -> bool:
+    return Path(path).suffix.lower() in IMAGE_EXTS
+
+
+def metadata_groups_present(meta: Dict[str, object]) -> Dict[str, bool]:
+    keys = list(meta.keys())
+    return {
+        'EXIF': any(k.startswith(('EXIF:', 'IFD0:', 'ExifIFD:', 'GPS:')) for k in keys),
+        'XMP': any(k.startswith('XMP:') for k in keys),
+        'ICC': any('ICC_Profile:' in k for k in keys),
+        'QuickTime': any(k.startswith(('QuickTime:', 'Keys:', 'UserData:', 'ItemList:')) for k in keys),
+        'MakerNotes': any('MakerNotes:' in k for k in keys),
+    }
+
+
+def detect_ai_markers(meta: Dict[str, object]) -> List[Tuple[str, str]]:
+    findings: List[Tuple[str, str]] = []
+    for key, value in meta.items():
+        if key == 'SourceFile':
+            continue
+        hay = (key + ' ' + str(value)).lower()
+        if any(term in hay for term in AI_MARKER_TERMS):
+            findings.append((key, str(value)))
+    return findings
+
+
+def detect_c2pa_markers(meta: Dict[str, object]) -> List[str]:
+    out = []
+    for key, value in meta.items():
+        combined = (key + ' ' + str(value)).lower()
+        if any(hint in combined for hint in C2PA_HINTS):
+            out.append(key)
+    return sorted(set(out))
+
+
+def audit_evidence_rating(ai_markers: List[Tuple[str, str]], c2pa_markers: List[str], embedded_count: int) -> Tuple[str, int, str]:
+    """Rate observable metadata/provenance signals, not probability of AI generation."""
+    if c2pa_markers and ai_markers:
+        return 'HIGH', 90, 'Direct provenance-style markers and AI-related metadata strings were both detected.'
+    if c2pa_markers:
+        return 'HIGH', 80, 'Provenance / Content Credentials-style markers were detected.'
+    if len(ai_markers) >= 2:
+        return 'MEDIUM', 65, 'Multiple AI-related metadata strings were detected.'
+    if len(ai_markers) == 1:
+        return 'LOW', 35, 'One AI-related metadata string was detected.'
+    if embedded_count == 0:
+        return 'INCONCLUSIVE', 10, 'No direct AI markers were found, but the file has a sparse metadata footprint.'
+    return 'NONE FOUND', 0, 'No direct AI/provenance metadata markers were found.'
+
+
+def audit_media_file(exe: str, path: str) -> Dict[str, object]:
+    meta = extract_metadata(exe, path)
+    kind = media_kind(path)
+    groups = metadata_groups_present(meta)
+    ai_markers = detect_ai_markers(meta)
+    c2pa_markers = detect_c2pa_markers(meta)
+    ext = Path(path).suffix.lower()
+    portable = portable_metadata(meta)
+    embedded = embedded_payload_metadata(meta)
+    rating, score, rating_note = audit_evidence_rating(ai_markers, c2pa_markers, len(embedded))
+
+    summary = [
+        ('File', Path(path).name),
+        ('Type', f"{kind.title()} ({ext.upper().lstrip('.')})"),
+        ('AI marker signal', f'{rating} ({score}/100)'),
+        ('Transferable tags', str(len(portable))),
+        ('Embedded metadata tags', str(len(embedded))),
+    ]
+    findings = [rating_note]
+    details = []
+
+    make = meta.get('EXIF:Make') or meta.get('IFD0:Make') or meta.get('Keys:Make')
+    model = meta.get('EXIF:Model') or meta.get('IFD0:Model') or meta.get('Keys:Model')
+    software = meta.get('EXIF:Software') or meta.get('IFD0:Software') or meta.get('Keys:Software') or meta.get('XMP:CreatorTool')
+    if make or model:
+        summary.append(('Device', ' '.join(str(x) for x in (make, model) if x)))
+    if software:
+        summary.append(('Software', str(software)))
+
+    findings.append('EXIF metadata is present.' if groups['EXIF'] else 'No EXIF metadata detected.')
+    findings.append('XMP metadata is present.' if groups['XMP'] else 'No XMP metadata detected.')
+    findings.append('ICC colour profile is present.' if groups['ICC'] else 'No ICC colour profile detected.')
+    if groups['MakerNotes']:
+        findings.append('MakerNotes are present.')
+
+    if c2pa_markers:
+        findings.append('Possible C2PA / Content Credentials-style markers detected.')
+        details.extend(f'Provenance marker field: {key}' for key in c2pa_markers[:8])
+    else:
+        findings.append('No obvious C2PA / Content Credentials-style metadata markers detected.')
+
+    if ai_markers:
+        findings.append(f'{len(ai_markers)} AI-related metadata marker(s) detected.')
+        details.extend(f'AI marker: {key} = {value}' for key, value in ai_markers[:10])
+    else:
+        findings.append('No obvious AI-related metadata strings detected.')
+
+    if kind == 'image':
+        dims = read_actual_pixel_dimensions(exe, path)
+        if dims:
+            summary.append(('Actual dimensions', f'{dims[0]} × {dims[1]}'))
+        if ext == '.png':
+            chunks = png_metadata_chunks(path)
+            meta_chunks = [c for c in chunks if c in {'eXIf', 'iTXt', 'tEXt', 'zTXt', 'iCCP', 'sRGB'}]
+            summary.append(('PNG metadata chunks', ', '.join(meta_chunks) if meta_chunks else 'None detected'))
+            if not meta_chunks:
+                findings.append('No PNG metadata-bearing ancillary chunks were found.')
+        if not embedded:
+            findings.append('Metadata footprint is minimal; this may result from export, screenshotting, or metadata stripping.')
+    else:
+        creation = meta.get('QuickTime:CreateDate') or meta.get('Keys:CreationDate')
+        rotation = meta.get('QuickTime:Rotation') or meta.get('Composite:Rotation')
+        encoder = meta.get('QuickTime:Encoder') or meta.get('ItemList:Encoder') or meta.get('Keys:Encoder')
+        if creation:
+            summary.append(('Embedded create date', str(creation)))
+        if rotation not in (None, ''):
+            summary.append(('Rotation', str(rotation)))
+        if encoder:
+            summary.append(('Encoder', str(encoder)))
+        if not groups['QuickTime']:
+            findings.append('No obvious writable QuickTime/Keys metadata detected.')
+
+    return {
+        'kind': kind,
+        'path': path,
+        'rating': rating,
+        'score': score,
+        'rating_note': rating_note,
+        'summary': summary,
+        'findings': findings,
+        'details': details,
+    }
+
+
 def canonical_values_for_tags(meta: Dict[str, object], names: set[str]) -> Dict[str, List[object]]:
     out: Dict[str, List[object]] = {}
     for key, value in meta.items():
@@ -1559,10 +1701,10 @@ class RepairWorker(QThread):
     finished_ok = Signal(list)
     failed = Signal(str)
 
-    def __init__(self, exe: str, reference: str, targets: List[str], output_dir: str, replace_originals: bool):
+    def __init__(self, exe: str, image_reference: str, video_reference: str, targets: List[str], output_dir: str, replace_originals: bool):
         super().__init__()
         self.exe = exe
-        self.reference = reference
+        self.references = {'image': image_reference or '', 'video': video_reference or ''}
         self.targets = targets
         self.output_dir = output_dir
         self.replace_originals = replace_originals
@@ -1570,7 +1712,7 @@ class RepairWorker(QThread):
     def run(self):
         results = []
         try:
-            ref_meta = extract_metadata(self.exe, self.reference)
+            ref_metas = {kind: extract_metadata(self.exe, ref) for kind, ref in self.references.items() if ref}
             output_folder = Path(self.output_dir)
             if not self.replace_originals:
                 output_folder.mkdir(parents=True, exist_ok=True)
@@ -1601,12 +1743,14 @@ class RepairWorker(QThread):
                         dest = unique_output_path(output_folder, source)
                         shutil.copy2(source, dest)
 
-                    ref_ext = Path(self.reference).suffix.lower()
+                    reference = self.references['video' if is_video else 'image']
+                    ref_meta = ref_metas['video' if is_video else 'image']
+                    ref_ext = Path(reference).suffix.lower()
                     dst_ext = dest.suffix.lower()
                     same_format = ref_ext == dst_ext or {ref_ext, dst_ext} <= {'.jpg', '.jpeg'}
 
                     if is_video:
-                        clone, clone_mode = clone_video_metadata(self.exe, self.reference, str(dest))
+                        clone, clone_mode = clone_video_metadata(self.exe, reference, str(dest))
                         clone_message = '\n'.join(x for x in ((clone.stdout or '').strip(), (clone.stderr or '').strip()) if x).strip()
                         if clone.returncode != 0:
                             raise RuntimeError('Video metadata clone failed: ' + (clone_message or 'ExifTool returned an error'))
@@ -1618,10 +1762,10 @@ class RepairWorker(QThread):
                     if (not is_video) and dst_ext == '.png' and not same_format:
                         clone_mode = 'png-direct-payload-v6-clean-aux-xmp'
                         _, clone_message = clone_metadata_to_png_binary(
-                            self.exe, self.reference, str(dest), target_orientation, target_dimensions
+                            self.exe, reference, str(dest), target_orientation, target_dimensions
                         )
                     elif not is_video:
-                        clone, clone_mode = clone_metadata(self.exe, self.reference, str(dest))
+                        clone, clone_mode = clone_metadata(self.exe, reference, str(dest))
                         clone_message = '\n'.join(x for x in (clone.stdout.strip(), clone.stderr.strip()) if x).strip()
                         if clone.returncode != 0:
                             raise RuntimeError('Clone failed: ' + (clone_message or 'ExifTool returned an error'))
@@ -1696,7 +1840,7 @@ class RepairWorker(QThread):
                     restore_filesystem_times(str(dest), source_fs_times)
 
                     if is_video:
-                        cross_format = Path(self.reference).suffix.lower() != dst_ext
+                        cross_format = Path(reference).suffix.lower() != dst_ext
                         missing, changed, extra = video_metadata_diff(ref_meta, repaired_meta)
                         if not missing and not changed:
                             status = 'VIDEO META MATCH'
@@ -1716,6 +1860,7 @@ class RepairWorker(QThread):
                         'written_tag_count': len(embedded), 'png_chunks': png_chunks,
                         'target_orientation': target_orientation, 'target_dimensions': target_dimensions,
                         'media_kind': 'video' if is_video else 'image',
+                        'reference': reference,
                         'video_mdat_sha256': video_mdat_before[0] if video_mdat_before else '',
                     })
                     chunk_detail = f', PNG chunks: {", ".join(sorted(set(png_chunks)))}' if png_chunks else ''
@@ -1858,6 +2003,68 @@ class CompareDialog(QDialog):
             QMessageBox.warning(self, 'Could not open folder', str(e))
 
 
+class AuditDialog(QDialog):
+    def __init__(self, audit: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('AI Fingerprint Audit')
+        self.setWindowIcon(make_app_icon())
+        self.resize(900, 650)
+        self.setMinimumSize(720, 500)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(12)
+
+        top = QHBoxLayout()
+        title_wrap = QVBoxLayout(); title_wrap.setSpacing(3)
+        title = QLabel('AI Fingerprint Audit'); title.setObjectName('SectionTitle')
+        subtitle = QLabel(Path(audit.get('path', '')).name); subtitle.setObjectName('Muted'); subtitle.setWordWrap(True)
+        title_wrap.addWidget(title); title_wrap.addWidget(subtitle)
+        top.addLayout(title_wrap); top.addStretch()
+
+        rating = str(audit.get('rating', 'INCONCLUSIVE'))
+        score = int(audit.get('score', 0))
+        badge = QLabel(f'{rating}  •  {score}/100')
+        badge.setObjectName('StatusWarn' if rating in {'HIGH', 'MEDIUM', 'LOW', 'INCONCLUSIVE'} else 'StatusReady')
+        top.addWidget(badge, 0, Qt.AlignTop)
+        root.addLayout(top)
+
+        note = QLabel(audit.get('rating_note', ''))
+        note.setObjectName('Muted'); note.setWordWrap(True)
+        root.addWidget(note)
+
+        caution = QLabel('Signal score = strength of observable metadata/provenance markers, not a probability that the media is AI-generated.')
+        caution.setObjectName('Small'); caution.setWordWrap(True)
+        root.addWidget(caution)
+
+        table = QTableWidget(0, 2)
+        table.setHorizontalHeaderLabels(['Field', 'Value'])
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        for field, value in audit.get('summary', []):
+            row = table.rowCount(); table.insertRow(row)
+            table.setItem(row, 0, QTableWidgetItem(str(field)))
+            table.setItem(row, 1, QTableWidgetItem(str(value)))
+        root.addWidget(table, 1)
+
+        findings_title = QLabel('Findings'); findings_title.setObjectName('SectionTitle')
+        root.addWidget(findings_title)
+        findings_box = QPlainTextEdit(); findings_box.setReadOnly(True)
+        lines = ['• ' + str(item) for item in audit.get('findings', [])]
+        if audit.get('details'):
+            lines += ['', 'Details:'] + ['  - ' + str(x) for x in audit.get('details', [])]
+        lines += ['', 'This audit is heuristic. A low/zero score does not prove that a file was not AI-generated.']
+        findings_box.setPlainText('\n'.join(lines))
+        root.addWidget(findings_box, 1)
+
+        close_row = QHBoxLayout(); close_row.addStretch()
+        close_btn = QPushButton('Close'); close_btn.setObjectName('Primary'); close_btn.clicked.connect(self.accept)
+        close_row.addWidget(close_btn); root.addLayout(close_row)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1898,21 +2105,36 @@ class MainWindow(QMainWindow):
         left = QVBoxLayout(left_card); left.setContentsMargins(18, 18, 18, 18); left.setSpacing(13)
 
         sec = QLabel('Reference media'); sec.setObjectName('SectionTitle'); left.addWidget(sec)
-        self.ref_preview = QLabel('No reference\nselected')
-        self.ref_preview.setAlignment(Qt.AlignCenter)
-        self.ref_preview.setFixedHeight(190)
-        self.ref_preview.setStyleSheet('background:#0a1120; border:1px dashed #34425d; border-radius:11px; color:#66748a; font-weight:600;')
-        left.addWidget(self.ref_preview)
 
-        self.ref_name = QLabel('Choose the known-good image or video')
-        self.ref_name.setObjectName('Muted'); self.ref_name.setWordWrap(True)
-        left.addWidget(self.ref_name)
-        self.ref_meta_summary = QLabel('Metadata summary will appear here.')
-        self.ref_meta_summary.setObjectName('Small'); self.ref_meta_summary.setWordWrap(True)
-        left.addWidget(self.ref_meta_summary)
+        self.image_ref_preview = QLabel('No image\nreference')
+        self.image_ref_preview.setAlignment(Qt.AlignCenter)
+        self.image_ref_preview.setFixedHeight(120)
+        self.image_ref_preview.setStyleSheet('background:#0a1120; border:1px dashed #34425d; border-radius:11px; color:#66748a; font-weight:600;')
+        left.addWidget(self.image_ref_preview)
 
-        ref_btn = QPushButton('Choose reference media')
-        ref_btn.clicked.connect(self.pick_reference); left.addWidget(ref_btn)
+        self.image_ref_name = QLabel('Choose the known-good image reference')
+        self.image_ref_name.setObjectName('Muted'); self.image_ref_name.setWordWrap(True)
+        left.addWidget(self.image_ref_name)
+        self.image_ref_meta_summary = QLabel('Image reference metadata summary will appear here.')
+        self.image_ref_meta_summary.setObjectName('Small'); self.image_ref_meta_summary.setWordWrap(True)
+        left.addWidget(self.image_ref_meta_summary)
+        img_ref_btn = QPushButton('Choose image reference')
+        img_ref_btn.clicked.connect(lambda: self.pick_reference('image')); left.addWidget(img_ref_btn)
+
+        self.video_ref_preview = QLabel('No video\nreference')
+        self.video_ref_preview.setAlignment(Qt.AlignCenter)
+        self.video_ref_preview.setFixedHeight(95)
+        self.video_ref_preview.setStyleSheet('background:#0a1120; border:1px dashed #34425d; border-radius:11px; color:#66748a; font-weight:600;')
+        left.addWidget(self.video_ref_preview)
+
+        self.video_ref_name = QLabel('Choose the known-good video reference')
+        self.video_ref_name.setObjectName('Muted'); self.video_ref_name.setWordWrap(True)
+        left.addWidget(self.video_ref_name)
+        self.video_ref_meta_summary = QLabel('Video reference metadata summary will appear here.')
+        self.video_ref_meta_summary.setObjectName('Small'); self.video_ref_meta_summary.setWordWrap(True)
+        left.addWidget(self.video_ref_meta_summary)
+        vid_ref_btn = QPushButton('Choose video reference')
+        vid_ref_btn.clicked.connect(lambda: self.pick_reference('video')); left.addWidget(vid_ref_btn)
 
         divider = QFrame(); divider.setFrameShape(QFrame.HLine); divider.setStyleSheet('color:#24314a;'); left.addWidget(divider)
 
@@ -1927,7 +2149,7 @@ class MainWindow(QMainWindow):
 
         out_label = QLabel('Output folder'); out_label.setObjectName('Small'); left.addWidget(out_label)
         out_row = QHBoxLayout(); out_row.setSpacing(8)
-        self.output_edit = QLineEdit(str(Path.home() / 'Pictures' / 'Repaired'))
+        self.output_edit = QLineEdit(str(app_dir() / 'Repaired'))
         out_row.addWidget(self.output_edit, 1)
         out_btn = QPushButton('Browse'); out_btn.clicked.connect(self.pick_output); out_row.addWidget(out_btn)
         left.addLayout(out_row)
@@ -1965,6 +2187,8 @@ class MainWindow(QMainWindow):
         target_actions = QHBoxLayout()
         add_btn = QPushButton('＋ Add files'); add_btn.clicked.connect(self.pick_targets); target_actions.addWidget(add_btn)
         remove_btn = QPushButton('Remove selected'); remove_btn.clicked.connect(self.remove_selected_targets); target_actions.addWidget(remove_btn)
+        self.audit_btn = QPushButton('Audit selected'); self.audit_btn.clicked.connect(self.audit_selected_target); target_actions.addWidget(self.audit_btn)
+        self.audit_any_btn = QPushButton('Audit any file'); self.audit_any_btn.clicked.connect(self.audit_any_file); target_actions.addWidget(self.audit_any_btn)
         clear_btn = QPushButton('Clear all'); clear_btn.setObjectName('Danger'); clear_btn.clicked.connect(self.clear_targets); target_actions.addWidget(clear_btn)
         target_actions.addStretch()
         right.addLayout(target_actions)
@@ -2013,53 +2237,67 @@ class MainWindow(QMainWindow):
 
     def update_ready_state(self):
         has_exif = bool(self.exif_edit.text().strip()) if hasattr(self, 'exif_edit') else bool(self.exiftool)
-        has_ref = bool(self.ref_edit_text())
         has_targets = bool(self.targets)
-        if has_exif and has_ref and has_targets:
+        required_kinds = {media_kind(x) for x in self.targets}
+        has_refs = bool(required_kinds) and all(bool(self.reference_for_kind(kind)) for kind in required_kinds)
+        if has_exif and has_targets and has_refs:
             self.set_badge(self.top_status, 'READY', 'ready')
         elif not has_exif:
             self.set_badge(self.top_status, 'EXIFTOOL NEEDED', 'warn')
         else:
             self.set_badge(self.top_status, 'SETUP NEEDED', 'idle')
 
-    def ref_edit_text(self) -> str:
-        return getattr(self, '_reference_path', '')
+    def reference_for_kind(self, kind: str) -> str:
+        if kind == 'video':
+            return getattr(self, '_video_reference_path', '')
+        return getattr(self, '_image_reference_path', '')
 
     def pick_exiftool(self):
         path, _ = QFileDialog.getOpenFileName(self, 'Choose ExifTool', '', 'Executable (*.exe);;All files (*)')
         if path:
             self.exif_edit.setText(path)
             self.exiftool = path
-            self.update_reference_metadata()
+            self.update_reference_metadata('image')
+            self.update_reference_metadata('video')
             self.update_ready_state()
 
-    def pick_reference(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, 'Choose Reference Media', '',
-            'Media (*.jpg *.jpeg *.png *.tif *.tiff *.webp *.heic *.heif *.avif *.mov *.mp4 *.m4v);;Images (*.jpg *.jpeg *.png *.tif *.tiff *.webp *.heic *.heif *.avif);;Videos (*.mov *.mp4 *.m4v);;All files (*)'
-        )
+    def pick_reference(self, kind: str):
+        if kind == 'video':
+            path, _ = QFileDialog.getOpenFileName(self, 'Choose Video Reference', '', 'Videos (*.mov *.mp4 *.m4v);;All files (*)')
+        else:
+            path, _ = QFileDialog.getOpenFileName(self, 'Choose Image Reference', '', 'Images (*.jpg *.jpeg *.png *.tif *.tiff *.webp *.heic *.heif *.avif);;All files (*)')
         if path:
-            self._reference_path = path
-            self.ref_name.setText(Path(path).name)
-            self.ref_name.setToolTip(path)
-            preview = load_preview(path, QSize(360, 180))
-            if preview:
-                self.ref_preview.setPixmap(preview)
-                self.ref_preview.setText('')
+            if kind == 'video':
+                self._video_reference_path = path
+                self.video_ref_name.setText(Path(path).name)
+                self.video_ref_name.setToolTip(path)
+                self.video_ref_preview.setPixmap(QPixmap())
+                self.video_ref_preview.setText('Video reference selected\npreview unavailable')
             else:
-                self.ref_preview.setPixmap(QPixmap())
-                self.ref_preview.setText('Preview unavailable\n(metadata can still be repaired)')
-            self.update_reference_metadata()
+                self._image_reference_path = path
+                self.image_ref_name.setText(Path(path).name)
+                self.image_ref_name.setToolTip(path)
+                preview = load_preview(path, QSize(360, 120))
+                if preview:
+                    self.image_ref_preview.setPixmap(preview)
+                    self.image_ref_preview.setText('')
+                else:
+                    self.image_ref_preview.setPixmap(QPixmap())
+                    self.image_ref_preview.setText('Preview unavailable\n(metadata can still be repaired)')
+            self.update_reference_metadata(kind)
+            self.refresh_target_labels()
             self.update_ready_state()
 
-    def update_reference_metadata(self):
-        path = self.ref_edit_text()
+    def update_reference_metadata(self, kind: str):
+        path = self.reference_for_kind(kind)
         exe = self.exif_edit.text().strip() if hasattr(self, 'exif_edit') else ''
+        summary_label = self.video_ref_meta_summary if kind == 'video' else self.image_ref_meta_summary
         if not path:
+            summary_label.setText('Metadata summary will appear here.')
             return
         size_text = human_size(Path(path).stat().st_size) if Path(path).exists() else 'Unknown size'
         if not exe or not Path(exe).exists():
-            self.ref_meta_summary.setText(f'{Path(path).suffix.upper().lstrip(".")} • {size_text}\nChoose ExifTool to inspect metadata.')
+            summary_label.setText(f"{Path(path).suffix.upper().lstrip('.')} • {size_text}\nChoose ExifTool to inspect metadata.")
             return
         try:
             meta = extract_metadata(exe, path)
@@ -2068,16 +2306,16 @@ class MainWindow(QMainWindow):
             model = meta.get('EXIF:Model') or meta.get('IFD0:Model') or meta.get('Keys:Model')
             date = meta.get('EXIF:DateTimeOriginal') or meta.get('ExifIFD:DateTimeOriginal') or meta.get('XMP:CreateDate') or meta.get('Keys:CreationDate') or meta.get('QuickTime:CreateDate')
             software = meta.get('EXIF:Software') or meta.get('IFD0:Software') or meta.get('XMP:CreatorTool') or meta.get('Keys:Software')
-            parts = [f'{len(portable)} transferable tags', f'{Path(path).suffix.upper().lstrip(".")} • {size_text}']
+            parts = [f'{len(portable)} transferable tags', f"{Path(path).suffix.upper().lstrip('.')} • {size_text}"]
             if make or model:
                 parts.append('Camera: ' + ' '.join(str(x) for x in (make, model) if x))
             if date:
                 parts.append('Captured: ' + str(date))
             if software:
                 parts.append('Software: ' + str(software))
-            self.ref_meta_summary.setText('\n'.join(parts[:5]))
+            summary_label.setText('\n'.join(parts[:5]))
         except Exception as e:
-            self.ref_meta_summary.setText(f'{Path(path).suffix.upper().lstrip(".")} • {size_text}\nCould not read metadata: {e}')
+            summary_label.setText(f"{Path(path).suffix.upper().lstrip('.')} • {size_text}\nCould not read metadata: {e}")
 
     def pick_output(self):
         path = QFileDialog.getExistingDirectory(self, 'Choose Output Folder', self.output_edit.text())
@@ -2091,6 +2329,24 @@ class MainWindow(QMainWindow):
         )
         self.add_targets(paths)
 
+    def target_reference_label(self, path: str) -> str:
+        kind = media_kind(path)
+        ref = self.reference_for_kind(kind)
+        ref_kind = 'VIDEO REF' if kind == 'video' else 'IMAGE REF'
+        ref_name = Path(ref).name if ref else 'not selected'
+        return f'{ref_kind} → {ref_name}'
+
+    def refresh_target_labels(self):
+        for row in range(self.drop_list.count()):
+            item = self.drop_list.item(row)
+            path_str = item.data(Qt.UserRole)
+            if not path_str:
+                continue
+            path = Path(path_str)
+            size = human_size(path.stat().st_size) if path.exists() else ''
+            item.setText(f'{path.name}\n{self.target_reference_label(path_str)}   •   {path.parent}   •   {size}')
+            item.setToolTip(f'{path}\nUses: {self.target_reference_label(path_str)}')
+
     def add_targets(self, paths):
         for p in paths:
             p = str(Path(p).resolve())
@@ -2098,7 +2354,8 @@ class MainWindow(QMainWindow):
                 self.targets.append(p)
                 path = Path(p)
                 size = human_size(path.stat().st_size) if path.exists() else ''
-                item = QListWidgetItem(f'{path.name}\n{path.parent}   •   {size}')
+                item = QListWidgetItem(f'{path.name}\n{self.target_reference_label(p)}   •   {path.parent}   •   {size}')
+                item.setToolTip(f'{path}\nUses: {self.target_reference_label(p)}')
                 item.setData(Qt.UserRole, p)
                 preview = load_preview(p, QSize(52, 52))
                 if preview:
@@ -2163,64 +2420,43 @@ class MainWindow(QMainWindow):
 
     def validate(self):
         exe = self.exif_edit.text().strip()
-        ref = self.ref_edit_text()
+        image_ref = self.reference_for_kind('image')
+        video_ref = self.reference_for_kind('video')
         if not exe or not Path(exe).exists():
             QMessageBox.warning(self, 'ExifTool required', 'Choose exiftool.exe first. The README includes the official download instructions.')
-            return None
-        if not ref or not Path(ref).is_file():
-            QMessageBox.warning(self, 'Reference required', 'Choose the known-good reference image or video.')
             return None
         if not self.targets:
             QMessageBox.warning(self, 'No targets', 'Drag in at least one broken image or video.')
             return None
-        if any(Path(x).resolve() == Path(ref).resolve() for x in self.targets):
-            QMessageBox.warning(self, 'Reference included', 'The reference file cannot also be one of the repair targets.')
+        if any(image_ref and Path(x).resolve() == Path(image_ref).resolve() for x in self.targets) or any(video_ref and Path(x).resolve() == Path(video_ref).resolve() for x in self.targets):
+            QMessageBox.warning(self, 'Reference included', 'A reference file cannot also be one of the repair targets.')
             return None
-        ref_kind = media_kind(ref)
-        mismatched = [Path(x).name for x in self.targets if media_kind(x) != ref_kind]
-        if mismatched:
-            QMessageBox.warning(
-                self, 'Media type mismatch',
-                'Use an image reference for image targets or a video reference for video targets.\n\n'
-                'Mismatched: ' + ', '.join(mismatched[:5])
-            )
-            return None
-        return exe, ref
-
-    def start_repair(self):
-        valid = self.validate()
-        if not valid: return
-        exe, ref = valid
-        output = self.output_edit.text().strip()
-        if not self.replace_box.isChecked() and not output:
-            QMessageBox.warning(self, 'Output required', 'Choose an output folder.')
-            return
-
-        ref_ext = Path(ref).suffix.lower()
-        if is_video_path(ref):
+        image_targets = [x for x in self.targets if is_image_path(x)]
+        video_targets = [x for x in self.targets if is_video_path(x)]
+        if video_targets:
             response = QMessageBox.question(
                 self, 'Video metadata mode',
-                'Video repair copies writable QuickTime/iPhone device/location metadata such as make/model/software and GPS. The target video\'s own creation/modify/track/media timestamps are preserved and reference dates are never injected.\n\n'
+                'Video repair copies writable QuickTime/iPhone device/location metadata such as make/model/software and GPS from your selected video reference. The target video\'s own creation/modify/track/media timestamps are preserved and reference dates are never injected.\n\n'
                 'It intentionally keeps each target video\'s real resolution, duration, frame rate, codec, rotation, HDR signalling, audio layout and media tracks. '
                 'Those are structural facts, not metadata that should be cloned from another video.\n\nContinue?',
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
             )
             if response != QMessageBox.Yes:
                 return
-            cross_targets = []
-        else:
-            cross_targets = [Path(x).name for x in self.targets if not (Path(x).suffix.lower() == ref_ext or {Path(x).suffix.lower(), ref_ext} <= {'.jpg', '.jpeg'})]
-        if cross_targets:
-            preview = ', '.join(cross_targets[:3]) + ('…' if len(cross_targets) > 3 else '')
-            response = QMessageBox.question(
-                self, 'Cross-format metadata mapping',
-                f'The reference is {ref_ext.upper().lstrip(".")} but {len(cross_targets)} target(s) use another format ({preview}).\n\n'
-                'The app will map compatible metadata into the target format instead of preserving HEIC/JPEG/PNG-specific container groups. '
-                'Some source-format-only fields cannot exist in the destination format.\n\nContinue?',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
-            )
-            if response != QMessageBox.Yes:
-                return
+        if image_targets and image_ref:
+            ref_ext = Path(image_ref).suffix.lower()
+            cross_targets = [Path(x).name for x in image_targets if not (Path(x).suffix.lower() == ref_ext or {Path(x).suffix.lower(), ref_ext} <= {'.jpg', '.jpeg'})]
+            if cross_targets:
+                preview = ', '.join(cross_targets[:3]) + ('…' if len(cross_targets) > 3 else '')
+                response = QMessageBox.question(
+                    self, 'Cross-format metadata mapping',
+                    f'The image reference is {ref_ext.upper().lstrip(".")} but {len(cross_targets)} image target(s) use another format ({preview}).\n\n'
+                    'The app will map compatible metadata into the target format instead of preserving HEIC/JPEG/PNG-specific container groups. '
+                    'Some source-format-only fields cannot exist in the destination format.\n\nContinue?',
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+                )
+                if response != QMessageBox.Yes:
+                    return
 
         if self.replace_box.isChecked():
             response = QMessageBox.question(
@@ -2235,12 +2471,13 @@ class MainWindow(QMainWindow):
         self.progress.setMaximum(len(self.targets)); self.progress.setValue(0)
         self.run_status.setText('Preparing repair…'); self.result_summary.setText(f'0 / {len(self.targets)} complete')
         self.set_badge(self.top_status, 'WORKING', 'warn')
-        self.log_box.appendPlainText(f'Reference: {ref}')
+        self.log_box.appendPlainText(f'Image reference: {image_ref or "(none)"}')
+        self.log_box.appendPlainText(f'Video reference: {video_ref or "(none)"}')
         self.log_box.appendPlainText(f'Targets: {len(self.targets)}')
         self.log_box.appendPlainText(f'Mode: {"Replace originals + backup" if self.replace_box.isChecked() else "Safe copies"}')
         self.log_box.appendPlainText('')
 
-        self.worker = RepairWorker(exe, ref, list(self.targets), output, self.replace_box.isChecked())
+        self.worker = RepairWorker(exe, image_ref, video_ref, list(self.targets), output, self.replace_box.isChecked())
         self.worker.log.connect(self.log_box.appendPlainText)
         self.worker.progress.connect(self.on_progress)
         self.worker.finished_ok.connect(self.on_finished)
@@ -2297,6 +2534,32 @@ class MainWindow(QMainWindow):
         if not result:
             result = next((x for x in reversed(self.results) if x.get('output')), self.results[-1])
         CompareDialog(result, self).exec()
+
+    def run_audit_dialog(self, path: str):
+        exe = self.exif_edit.text().strip()
+        if not exe or not Path(exe).exists():
+            QMessageBox.warning(self, 'ExifTool required', 'Choose exiftool.exe first.')
+            return
+        try:
+            audit = audit_media_file(exe, path)
+            AuditDialog(audit, self).exec()
+        except Exception as e:
+            QMessageBox.warning(self, 'Audit failed', str(e))
+
+    def audit_selected_target(self):
+        item = self.drop_list.currentItem()
+        if not item:
+            QMessageBox.information(self, 'Select a file', 'Select a queued image or video first, or use “Audit any file”.')
+            return
+        self.run_audit_dialog(item.data(Qt.UserRole))
+
+    def audit_any_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Choose Media to Audit', '',
+            'Media (*.jpg *.jpeg *.png *.tif *.tiff *.webp *.heic *.heif *.avif *.mov *.mp4 *.m4v);;All files (*)'
+        )
+        if path:
+            self.run_audit_dialog(path)
 
     def open_output_folder(self):
         if self.replace_box.isChecked(): return
