@@ -1,10 +1,10 @@
-"""Metadata Repair Tool v2.7.0 unified entry point.
+"""Metadata Repair Tool v2.7.1 unified entry point.
 
 Combines:
-- app_v26.py: optional image SynthID/invisible-watermark cleanup
+- app_v26.py: optional image SynthID / invisible-watermark cleanup
 - app_plus.py: Topaz Video enhancement + cleaned-output naming
 
-It also auto-loads trusted reference media from a sibling "good images" folder.
+Also auto-loads trusted default reference media from a sibling "good images" folder.
 """
 
 from __future__ import annotations
@@ -19,12 +19,17 @@ import app as core
 import app_plus as topaz
 import app_v26 as ai
 
+APP_VERSION = "2.7.1"
 
-APP_VERSION = "2.7.0"
+IMAGE_EXTS = set(getattr(core, "IMAGE_EXTS", {
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif"
+}))
+VIDEO_EXTS = set(getattr(core, "VIDEO_EXTS", {
+    ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".webm"
+}))
 
 
 def _reference_sort_key(path: Path, kind: str) -> tuple[int, str]:
-    """Prefer HEIC for images and MOV for videos, then fall back to other supported types."""
     ext = path.suffix.lower()
     if kind == "image":
         priority = {
@@ -33,33 +38,33 @@ def _reference_sort_key(path: Path, kind: str) -> tuple[int, str]:
             ".jpg": 2,
             ".jpeg": 3,
             ".png": 4,
-            ".tif": 5,
-            ".tiff": 6,
-            ".webp": 7,
+            ".webp": 5,
+            ".tif": 6,
+            ".tiff": 7,
             ".avif": 8,
+            ".bmp": 9,
         }
     else:
         priority = {
             ".mov": 0,
             ".mp4": 1,
             ".m4v": 2,
+            ".avi": 3,
+            ".mkv": 4,
+            ".webm": 5,
         }
     return priority.get(ext, 99), path.name.lower()
 
 
 class MainWindow(ai.MainWindow, topaz.MainWindow):
-    """One window containing both the optional image scrubber and Topaz video tools."""
+    """One window containing metadata repair, optional AI image cleanup, and Topaz tools."""
 
     def __init__(self):
-        # Cooperative multiple inheritance works here:
-        # ai.MainWindow -> topaz.MainWindow -> core.MainWindow.
-        # The metadata UI is created once, then both feature panels are added.
         super().__init__()
         self.setWindowTitle(f"Metadata Repair Tool v{APP_VERSION}")
         self._autoload_good_references()
 
     def _autoload_good_references(self):
-        """Fill image/video references from <app folder>/good images when available."""
         folder = core.app_dir() / "good images"
         if not folder.is_dir():
             return
@@ -70,11 +75,11 @@ class MainWindow(ai.MainWindow, topaz.MainWindow):
             return
 
         image_candidates = sorted(
-            (p for p in files if p.suffix.lower() in core.IMAGE_EXTS),
+            (p for p in files if p.suffix.lower() in IMAGE_EXTS),
             key=lambda p: _reference_sort_key(p, "image"),
         )
         video_candidates = sorted(
-            (p for p in files if p.suffix.lower() in core.VIDEO_EXTS),
+            (p for p in files if p.suffix.lower() in VIDEO_EXTS),
             key=lambda p: _reference_sort_key(p, "video"),
         )
 

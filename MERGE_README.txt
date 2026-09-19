@@ -1,42 +1,43 @@
-Metadata Repair Tool v2.7.0 merge patch
+Metadata Repair Tool v2.7.1 full merged drag-and-drop patch
 
 Drop these files into the root of your existing metadataInjector folder.
 
-REPLACES:
+Replaces:
+- app_v26.py
 - run.bat
 - build_exe.bat
 - VERSION.txt
 
-ADDS:
+Adds:
 - app_unified.py
 
-KEEP these existing files:
+Keep these existing files:
 - app.py
-- app_v26.py
 - app_plus.py
 - requirements.txt
 - ExifTool files
 
-Features now live together in one app:
+Included in this merged version:
 - normal metadata repair
-- optional image SynthID/invisible-watermark cleanup
+- optional image SynthID / invisible-watermark cleanup
 - Topaz video enhancement
-- automatic trusted references from "good images"
+- default trusted references auto-loaded from a folder named "good images"
 
-AI image cleanup remains OFF by default.
-Tick "Remove invisible AI watermark before metadata repair" only when you want it.
+Notes:
+- The AI image cleanup checkbox remains OFF by default.
+- HEIC / HEIF are supported for the image reference.
+- MOV is supported for the video reference.
+- The app prefers .heic for image references and .mov for video references.
+- run.bat now launches the GUI without leaving a console window sitting open.
 
-Default trusted references:
-Create this folder beside the source files / built EXE:
-
-good images\
-
-Put at least:
-- one image reference (HEIC is supported and preferred)
-- one video reference (MOV is supported and preferred)
-
-If several files exist, the app prefers:
-Image: .heic, .heif, .jpg, .jpeg, .png, ...
-Video: .mov, .mp4, .m4v
-
-The normal Choose image/video reference buttons still work and can override the auto-loaded references for the current session.
+Example layout:
+metadataInjector\
+  app.py
+  app_plus.py
+  app_v26.py
+  app_unified.py
+  run.bat
+  build_exe.bat
+  good images\
+    reference.HEIC
+    reference.MOV
