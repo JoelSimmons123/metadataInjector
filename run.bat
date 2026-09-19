@@ -15,11 +15,11 @@ if not exist ".venv\Scripts\python.exe" (
   call .venv\Scripts\activate.bat
 )
 
-echo Starting Metadata Repair Tool...
+echo Starting Metadata Repair Tool v2.7.0...
 echo Crash/output log: %CD%\last_run.log
 echo.
 
-python -X faulthandler app_plus.py > last_run.log 2>&1
+python -X faulthandler app_unified.py > last_run.log 2>&1
 set "APPERR=%ERRORLEVEL%"
 
 if not "%APPERR%"=="0" (
@@ -43,7 +43,7 @@ exit /b 0
 echo.
 echo ============================================================
 echo SETUP FAILED
- echo ============================================================
+echo ============================================================
 echo.
 echo The Python environment/dependencies could not be installed.
 echo.

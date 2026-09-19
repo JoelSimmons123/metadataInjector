@@ -120,6 +120,39 @@ def _cleanup_error_message(returncode: int, output: str) -> str:
     return f"AI cleanup failed with exit code {returncode}."
 
 
+def _displayed_dimensions(dimensions, orientation):
+    """Return the image's displayed (width, height) after EXIF orientation is applied."""
+    if not dimensions:
+        return None
+    try:
+        width, height = int(dimensions[0]), int(dimensions[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    try:
+        orientation = int(orientation or 1)
+    except (TypeError, ValueError):
+        orientation = 1
+    if orientation in {5, 6, 7, 8}:
+        return (height, width)
+    return (width, height)
+
+
+def _normalise_upright_orientation(exiftool: str, path: str, source_name: str):
+    """After AI cleanup, keep the output physically upright instead of re-applying the old tag."""
+    orient_write = core.run_exiftool(exiftool, [
+        "-m", "-P",
+        "-Orientation#=1",
+        "-XMP-tiff:Orientation#=1",
+        "-overwrite_original",
+        path,
+    ])
+    if orient_write.returncode != 0:
+        raise RuntimeError(
+            f"Could not normalise the AI-cleaned orientation for {source_name}: "
+            + ((orient_write.stderr or orient_write.stdout or "ExifTool failed").strip())
+        )
+
+
 class AICleanupWorker(QThread):
     """Run one reusable-model batch scrub before the normal metadata repair worker."""
 
@@ -161,11 +194,14 @@ class AICleanupWorker(QThread):
                 staged_name = f"{index:04d}__{source.name}"
                 staged_path = batch_input / staged_name
                 shutil.copy2(source, staged_path)
+                source_orientation = core.read_numeric_orientation(self.exiftool, str(source)) or 1
+                source_dimensions = core.read_actual_pixel_dimensions(self.exiftool, str(source))
                 staged[staged_name] = {
                     "original": str(source),
                     "fs_times": core.capture_filesystem_times(str(source)),
-                    "orientation": core.read_numeric_orientation(self.exiftool, str(source)) or 1,
-                    "dimensions": core.read_actual_pixel_dimensions(self.exiftool, str(source)),
+                    "orientation": source_orientation,
+                    "dimensions": source_dimensions,
+                    "display_dimensions": _displayed_dimensions(source_dimensions, source_orientation),
                     "index": index,
                 }
 
@@ -261,28 +297,21 @@ class AICleanupWorker(QThread):
                 clean_path = item_dir / source.name
                 shutil.copy2(generated, clean_path)
 
-                clean_dims = core.read_actual_pixel_dimensions(self.exiftool, str(clean_path))
-                original_dims = info["dimensions"]
-                if original_dims and clean_dims and tuple(clean_dims) != tuple(original_dims):
-                    raise RuntimeError(
-                        f"AI cleanup changed {source.name} dimensions from "
-                        f"{original_dims[0]}x{original_dims[1]} to {clean_dims[0]}x{clean_dims[1]}; repair stopped."
-                    )
+                # remove-ai-watermarks already EXIF-transposes the pixels before diffusion,
+                # so the cleaned output should remain physically upright. Re-applying the
+                # source Orientation tag here would rotate the display a second time.
+                _normalise_upright_orientation(self.exiftool, str(clean_path), source.name)
 
-                orientation = int(info["orientation"])
-                if orientation != 1:
-                    orient_write = core.run_exiftool(self.exiftool, [
-                        "-m", "-P",
-                        f"-Orientation#={orientation}",
-                        f"-XMP-tiff:Orientation#={orientation}",
-                        "-overwrite_original",
-                        str(clean_path),
-                    ])
-                    if orient_write.returncode != 0:
-                        raise RuntimeError(
-                            f"Could not preserve the original orientation for {source.name}: "
-                            + ((orient_write.stderr or orient_write.stdout or "ExifTool failed").strip())
-                        )
+                final_dims = core.read_actual_pixel_dimensions(self.exiftool, str(clean_path))
+                final_orientation = core.read_numeric_orientation(self.exiftool, str(clean_path)) or 1
+                original_display_dims = info.get("display_dimensions")
+                final_display_dims = _displayed_dimensions(final_dims, final_orientation)
+                if original_display_dims and final_display_dims and tuple(final_display_dims) != tuple(original_display_dims):
+                    raise RuntimeError(
+                        f"AI cleanup changed {source.name} display geometry from "
+                        f"{original_display_dims[0]}x{original_display_dims[1]} to "
+                        f"{final_display_dims[0]}x{final_display_dims[1]}; repair stopped."
+                    )
 
                 core.restore_filesystem_times(str(clean_path), info["fs_times"])
                 cleaned_map[str(source)] = str(clean_path)
