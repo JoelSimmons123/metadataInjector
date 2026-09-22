@@ -1,4 +1,8 @@
-# Metadata Repair Tool v2.8.3
+# Metadata Repair Tool v2.8.4
+
+## v2.8.4 — preserve video orientation and shape during Topaz upscale
+
+The upscale stage reads an actual decoded source frame before choosing its canvas. The 1080p/720p preset sets the shorter side and keeps the input aspect ratio, including square and 4:3 video. For portrait 9:16, 1080p still means exactly 1080×1920. After Topaz finishes, the app decodes its output and rejects/deletes it if the output dimensions differ from those requested. This prevents the observed 720×1280 input becoming a tiny portrait frame in a 1920×1080 landscape canvas. Previously damaged files need to be upscaled again from the original source.
 
 ## v2.8.3 — clear AAC encoder identification
 

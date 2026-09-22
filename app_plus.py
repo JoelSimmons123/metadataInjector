@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -137,69 +138,46 @@ def _topaz_env(model_dir: str) -> dict:
 
 
 def _probe_video_dimensions(ffmpeg_path: str, source: str, exiftool: str | None) -> tuple[int, int]:
-    ffprobe_name = 'ffprobe.exe' if os.name == 'nt' else 'ffprobe'
-    ffprobe = Path(ffmpeg_path).with_name(ffprobe_name)
-    if ffprobe.exists():
+    # The Topaz build's ffprobe can report a different stored orientation from
+    # the frame that its decoder actually hands to tvai_up. Probe that frame,
+    # which is what the output canvas must follow.
+    candidates = [ffmpeg_path]
+    try:
+        standard_ffmpeg, _ = core.find_ffmpeg()
+        if standard_ffmpeg != ffmpeg_path:
+            candidates.append(standard_ffmpeg)
+    except RuntimeError:
+        pass
+    decoded = []
+    for candidate in candidates:
         p = subprocess.run(
-            [str(ffprobe), '-v', 'error', '-select_streams', 'v:0',
-             '-show_entries', 'stream=width,height', '-of', 'json', source],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            encoding='utf-8', errors='replace', creationflags=_creationflags(),
+            [candidate, '-v', 'error', '-nostdin', '-i', source,
+             '-map', '0:v:0', '-frames:v', '1', '-c:v', 'png', '-f', 'image2pipe', '-'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_creationflags(),
         )
-        if p.returncode == 0:
-            try:
-                data = json.loads(p.stdout)
-                stream = (data.get('streams') or [{}])[0]
-                w, h = int(stream['width']), int(stream['height'])
-                if w > 0 and h > 0:
-                    return w, h
-            except Exception:
-                pass
-
-    if exiftool and Path(exiftool).exists():
-        meta = core.extract_metadata(exiftool, source)
-        preferred_pairs = [
-            ('QuickTime:ImageWidth', 'QuickTime:ImageHeight'),
-            ('Track1:ImageWidth', 'Track1:ImageHeight'),
-            ('Composite:ImageWidth', 'Composite:ImageHeight'),
-        ]
-        for wk, hk in preferred_pairs:
-            if wk in meta and hk in meta:
-                try:
-                    w, h = int(float(meta[wk])), int(float(meta[hk]))
-                    if w > 0 and h > 0:
-                        return w, h
-                except (TypeError, ValueError):
-                    pass
-        widths, heights = [], []
-        for key, value in meta.items():
-            local = key.rsplit(':', 1)[-1]
-            try:
-                numeric = int(float(value))
-            except (TypeError, ValueError):
-                continue
-            if numeric <= 0:
-                continue
-            if local == 'ImageWidth':
-                widths.append(numeric)
-            elif local in {'ImageHeight', 'ImageLength'}:
-                heights.append(numeric)
-        if widths and heights:
-            return widths[0], heights[0]
-    raise RuntimeError('Could not determine the source video dimensions.')
+        if p.returncode == 0 and p.stdout.startswith(b'\x89PNG\r\n\x1a\n') and len(p.stdout) >= 24:
+            w, h = struct.unpack('>II', p.stdout[16:24])
+            if w > 0 and h > 0:
+                decoded.append((w, h))
+    if len(set(decoded)) > 1:
+        raise RuntimeError(
+            f'Video decoders disagree about display orientation: {decoded}. '
+            'Upscale stopped to avoid a rotated or letterboxed output.'
+        )
+    if decoded:
+        return decoded[0]
+    raise RuntimeError('Could not decode a source frame to verify its display orientation.')
 
 
 def _target_dimensions(width: int, height: int, short_side: int) -> tuple[int, int]:
-    """Return exact HD/FHD dimensions while preserving portrait vs landscape orientation.
-
-    The earlier implementation preserved the source aspect ratio exactly, which meant a
-    nominal 1080p portrait preset could become 1080x1922 (or, because Topaz internally
-    chose a 2x scale, 960x1708).  The presets now mean exactly 720x1280 / 1080x1920 for
-    portrait and 1280x720 / 1920x1080 for landscape.
-    """
+    """Use the selected short side and retain the source display aspect ratio."""
     if short_side not in {720, 1080}:
         raise ValueError(f'Unsupported output preset: {short_side}p')
-    long_side = 1280 if short_side == 720 else 1920
+    if width <= 0 or height <= 0:
+        raise ValueError('Invalid source video dimensions.')
+    # H.264 4:2:0 requires even dimensions. Canonical 9:16 and 16:9 frames
+    # remain exactly 1080x1920 / 1920x1080 under this calculation.
+    long_side = max(short_side, 2 * round((short_side * max(width, height) / min(width, height)) / 2))
     return (short_side, long_side) if width <= height else (long_side, short_side)
 
 
@@ -371,6 +349,16 @@ class VideoUpscaleWorker(QThread):
                     raise RuntimeError(
                         f'Topaz failed for {source.name}.\n\nCommand:\n{command_text}\n\n'
                         f'{tail or "ffmpeg returned an error."}'
+                    )
+
+                actual_w, actual_h = _probe_video_dimensions(
+                    self.ffmpeg_path, str(destination), self.exiftool
+                )
+                if (actual_w, actual_h) != (out_w, out_h):
+                    destination.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f'Topaz output orientation/size changed: expected {out_w}×{out_h}, '
+                        f'got {actual_w}×{actual_h}. The incorrect output was deleted.'
                     )
 
                 outputs.append(str(destination))
