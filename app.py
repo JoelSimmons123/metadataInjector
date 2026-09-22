@@ -10,6 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+from video_quicktime import remux_to_mov, verify_streams, find_ffmpeg
 
 from PySide6.QtCore import Qt, QThread, Signal, QSize
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QPixmap, QPainter, QColor, QFont
@@ -53,19 +54,13 @@ TARGET_LAYOUT_TAGS = {
 }
 
 
-# Video mode deliberately copies user/provenance metadata, not media-track facts.
-# Codec, dimensions, duration, frame rate, rotation, HDR signalling, audio layout,
-# handler/vendor IDs and timed metadata streams describe the target's actual media
-# and must remain truthful to that target.  v2.2 also treats ALL capture/create/modify
-# times as target-owned: reference timestamps are never injected into a video.
+# Video mode transfers selected reference device labels after a stream-copy remux.
+# The encoded streams and target media properties are checked after writing.
 VIDEO_TRANSFER_TAGS = (
     'Keys:Make', 'Keys:Model', 'Keys:Software',
-    'Keys:GPSCoordinates', 'Keys:LocationAccuracyHorizontal',
-    'Keys:FullFrameRatePlaybackIntent',
 )
 VIDEO_TRANSFER_CANONICAL = {
-    'Make', 'Model', 'Software', 'GPSCoordinates',
-    'LocationAccuracyHorizontal', 'FullFrameRatePlaybackIntent',
+    'Make', 'Model', 'Software',
 }
 VIDEO_TEMPORAL_LOCAL_TAGS = {
     'CreationDate', 'CreateDate', 'ModifyDate',
@@ -1214,15 +1209,12 @@ def _first_local_tag_value(meta: Dict[str, object], tag_name: str) -> object | N
 
 
 def video_reference_values(meta: Dict[str, object]) -> Dict[str, object]:
-    """Reference-owned video metadata that v2.2 intentionally transfers."""
+    """Selected reference device tags; never transfer location or capture times."""
     vals: Dict[str, object] = {}
     preferred = {
         'Make': ('Keys:Make',),
         'Model': ('Keys:Model',),
         'Software': ('Keys:Software',),
-        'GPSCoordinates': ('Keys:GPSCoordinates',),
-        'LocationAccuracyHorizontal': ('Keys:LocationAccuracyHorizontal',),
-        'FullFrameRatePlaybackIntent': ('Keys:FullFrameRatePlaybackIntent',),
     }
     for logical, keys in preferred.items():
         for key in keys:
@@ -1459,13 +1451,7 @@ def video_metadata_diff(reference: Dict[str, object], target: Dict[str, object])
 
 
 def clone_video_metadata(exe: str, reference: str, dest: str) -> Tuple[subprocess.CompletedProcess, str]:
-    """Copy iPhone-style metadata while preserving the target's own timestamps/media facts."""
-    raw_ref = extract_video_reference_raw_values(exe, reference)
-    ffri = _first_local_tag_value(raw_ref, 'FullFrameRatePlaybackIntent')
-    target_times = extract_video_temporal_metadata(exe, dest)
-
-    # Strip writable user-facing metadata.  Crucially, do NOT delete QuickTime
-    # movie/track/media date atoms: those are target-owned and stay untouched.
+    """Keep only selected device keys after a fresh QuickTime remux."""
     clear_args = [
         '-m', '-P',
         '-Keys:All=', '-UserData:All=', '-ItemList:All=', '-XMP:All=',
@@ -1475,11 +1461,10 @@ def clone_video_metadata(exe: str, reference: str, dest: str) -> Tuple[subproces
     if cleared.returncode != 0:
         return cleared, 'video-clear-failed'
 
-    # Copy only reference-owned provenance/device fields. No reference dates.
+    # Copy device labels only. Never copy reference location, times or playback intent.
     args = [
         '-m', '-P', '-TagsFromFile', reference,
         '-Keys:Make', '-Keys:Model', '-Keys:Software',
-        '-Keys:GPSCoordinates', '-Keys:LocationAccuracyHorizontal',
         '-overwrite_original', dest,
     ]
     copied = run_exiftool(exe, args)
@@ -1491,60 +1476,30 @@ def clone_video_metadata(exe: str, reference: str, dest: str) -> Tuple[subproces
         copied.stdout = combined_out
         return copied, 'video-copy-failed'
 
-    # Restore target-owned date fields from groups that the stripping pass cleared.
-    restored = _restore_video_metadata_group_timestamps(exe, dest, target_times)
-    if restored is not None and restored.returncode != 0:
-        combined_out = '\n'.join(x for x in (
-            (cleared.stdout or '').strip(), (cleared.stderr or '').strip(),
-            (copied.stdout or '').strip(), (copied.stderr or '').strip(),
-            (restored.stdout or '').strip(), (restored.stderr or '').strip(),
-        ) if x)
-        restored.stdout = combined_out
-        return restored, 'video-target-time-restore-failed'
-
-    # Add the Apple playback-intent key, then patch its raw QuickTime data atom
-    # to the same native integer representation used by iPhone files.
-    exact = None
-    if ffri is not None:
-        exact = run_exiftool(exe, [
-            '-m', '-P', _safe_exif_assignment('Keys:FullFrameRatePlaybackIntent', ffri, raw_numeric=True),
-            '-overwrite_original', dest,
-        ])
-        if exact.returncode != 0:
-            combined_out = '\n'.join(x for x in (
-                (cleared.stdout or '').strip(), (copied.stdout or '').strip(),
-                (exact.stdout or '').strip(), (exact.stderr or '').strip(),
-            ) if x)
-            exact.stdout = combined_out
-            return exact, 'video-playback-intent-write-failed'
-        try:
-            expected = int(ffri)
-            count = normalise_quicktime_integer_key(
-                dest, 'com.apple.quicktime.full-frame-rate-playback-intent', expected
-            )
-            if count <= 0:
-                raise RuntimeError('Playback-intent QuickTime key was not found after ExifTool write.')
-            representations = inspect_quicktime_integer_key(
-                dest, 'com.apple.quicktime.full-frame-rate-playback-intent'
-            )
-            if not representations or any(dtype != 21 or value != expected for dtype, value in representations):
-                raise RuntimeError(f'Playback-intent native integer verification failed: {representations!r}')
-        except Exception as exc:
-            exact.returncode = 1
-            exact.stderr = (exact.stderr or '') + f'\n{exc}'
-            return exact, 'video-playback-intent-native-type-failed'
-
-    final_proc = exact or restored or copied
     combined_out = '\n'.join(x for x in (
         (cleared.stdout or '').strip(), (cleared.stderr or '').strip(),
         (copied.stdout or '').strip(), (copied.stderr or '').strip(),
-        ((restored.stdout or '').strip() if restored else ''),
-        ((restored.stderr or '').strip() if restored else ''),
-        ((exact.stdout or '').strip() if exact else ''),
-        ((exact.stderr or '').strip() if exact else ''),
     ) if x)
-    final_proc.stdout = combined_out
-    return final_proc, 'video-quicktime-safe-v2.2-target-times'
+    copied.stdout = combined_out
+    return copied, 'video-quicktime-mov-no-location'
+
+
+def audit_video_privacy(meta: Dict[str, object]) -> None:
+    """Fail closed if location or obvious AI provenance survives the remux."""
+    forbidden = ('gps', 'location', 'latitude', 'longitude', 'aigc', 'c2pa',
+                 'contentcredentials', 'synthid')
+    found = []
+    for key in meta:
+        if key == 'SourceFile' or key.startswith(('File:', 'System:', 'Composite:')):
+            continue
+        local = key.rsplit(':', 1)[-1].lower().replace(' ', '')
+        if any(term in local for term in forbidden):
+            found.append(key)
+        if (local == 'vendorid' and str(meta[key]).lower() in ('ffmpeg', 'ffmp')) or (
+                local == 'encoder' and str(meta[key]).lower().startswith(('lavf', 'lavc'))):
+            found.append(key)
+    if found:
+        raise RuntimeError('Unwanted video metadata survived: ' + ', '.join(found[:12]))
 
 
 def capture_filesystem_times(path: str) -> Dict[str, object]:
@@ -1620,12 +1575,13 @@ def restore_filesystem_times(path: str, snap: Dict[str, object]) -> None:
         pass
 
 def unique_output_path(folder: Path, source: Path) -> Path:
-    candidate = folder / source.name
+    suffix = '.mov' if is_video_path(source) else source.suffix
+    candidate = folder / f'{source.stem}{suffix}'
     if not candidate.exists():
         return candidate
     n = 2
     while True:
-        candidate = folder / f'{source.stem}_repaired_{n}{source.suffix}'
+        candidate = folder / f'{source.stem}_repaired_{n}{suffix}'
         if not candidate.exists():
             return candidate
         n += 1
@@ -1722,26 +1678,28 @@ class RepairWorker(QThread):
                 self.progress.emit(i - 1, len(self.targets), source.name, 'Processing')
                 source_fs_times = capture_filesystem_times(str(source))
                 is_video = is_video_path(str(source))
-                # Image orientation/dimensions are target-specific. Video target structure
-                # is snapshot separately and verified byte-for-byte at the mdat level.
+                # Image orientation/dimensions are target-specific. Video packets
+                # are checked after the container change.
                 target_orientation = (read_numeric_orientation(self.exe, str(source)) or 1) if not is_video else 1
                 target_dimensions = read_actual_pixel_dimensions(self.exe, str(source)) if not is_video else None
-                video_before_meta = extract_metadata(self.exe, str(source)) if is_video else None
-                video_time_before = extract_video_temporal_metadata(self.exe, str(source)) if is_video else {}
-                video_mdat_before = quicktime_mdat_digest(str(source)) if is_video else None
                 dest = None
                 backup = None
                 clone_message = ''
                 clone_mode = ''
                 try:
                     if self.replace_originals:
-                        dest = source
+                        dest = source if not is_video or source.suffix.lower() == '.mov' else source.with_suffix('.mov')
+                        if dest != source and dest.exists():
+                            dest = unique_output_path(source.parent, source)
                         backup = source.with_suffix(source.suffix + '.metadatarepair_backup')
+                        if is_video and backup.exists():
+                            backup = unique_output_path(source.parent, backup)
                         if not backup.exists():
                             shutil.copy2(source, backup)
                     else:
                         dest = unique_output_path(output_folder, source)
-                        shutil.copy2(source, dest)
+                        if not is_video:
+                            shutil.copy2(source, dest)
 
                     reference = self.references['video' if is_video else 'image']
                     ref_meta = ref_metas['video' if is_video else 'image']
@@ -1750,6 +1708,7 @@ class RepairWorker(QThread):
                     same_format = ref_ext == dst_ext or {ref_ext, dst_ext} <= {'.jpg', '.jpeg'}
 
                     if is_video:
+                        remux_note = remux_to_mov(str(backup if dest == source else source), str(dest))
                         clone, clone_mode = clone_video_metadata(self.exe, reference, str(dest))
                         clone_message = '\n'.join(x for x in ((clone.stdout or '').strip(), (clone.stderr or '').strip()) if x).strip()
                         if clone.returncode != 0:
@@ -1799,17 +1758,9 @@ class RepairWorker(QThread):
 
                     if is_video:
                         repaired_meta = extract_metadata(self.exe, str(dest))
-                        structure_changes = compare_video_structure(video_before_meta or {}, repaired_meta)
-                        if structure_changes:
-                            raise RuntimeError('Video structural metadata changed unexpectedly: ' + '; '.join(structure_changes[:8]))
-                        video_time_after = extract_video_temporal_metadata(self.exe, str(dest))
-                        time_changes = video_temporal_diff(video_time_before, video_time_after)
-                        if time_changes:
-                            preview = '; '.join(f'{k}: {b!r} -> {a!r}' for k, b, a in time_changes[:8])
-                            raise RuntimeError('Target video timestamps changed unexpectedly: ' + preview)
-                        video_mdat_after = quicktime_mdat_digest(str(dest))
-                        if video_mdat_before != video_mdat_after:
-                            raise RuntimeError('Encoded media payload changed. Repair aborted because video/audio sample bytes must remain untouched.')
+                        audit_video_privacy(repaired_meta)
+                        _, ffprobe = find_ffmpeg()
+                        verify_streams(str(source if dest != source else backup), str(dest), ffprobe)
                     else:
                         validate_target_layout_metadata(self.exe, str(dest), target_dimensions, target_orientation)
                         if dst_ext == '.png' and not same_format:
@@ -1827,7 +1778,7 @@ class RepairWorker(QThread):
                             'No PNG metadata chunks were written (output still contains only image-data chunks). '
                             + (clone_message or 'The HEIC metadata needs an explicit destination mapping.')
                         )
-                    if ref_embedded and not embedded:
+                    if not is_video and ref_embedded and not embedded:
                         raise RuntimeError(
                             'ExifTool completed but wrote no transferable metadata. '
                             + (clone_message or 'The destination format accepted none of the source tags.')
@@ -1838,6 +1789,8 @@ class RepairWorker(QThread):
                     # creation/access/write FILETIMEs when available; other platforms keep
                     # access/modify times.
                     restore_filesystem_times(str(dest), source_fs_times)
+                    if self.replace_originals and is_video and dest != source:
+                        source.unlink()
 
                     if is_video:
                         cross_format = Path(reference).suffix.lower() != dst_ext
@@ -1861,12 +1814,12 @@ class RepairWorker(QThread):
                         'target_orientation': target_orientation, 'target_dimensions': target_dimensions,
                         'media_kind': 'video' if is_video else 'image',
                         'reference': reference,
-                        'video_mdat_sha256': video_mdat_before[0] if video_mdat_before else '',
+                        'video_mdat_sha256': '',
                     })
                     chunk_detail = f', PNG chunks: {", ".join(sorted(set(png_chunks)))}' if png_chunks else ''
                     layout_detail = ''
-                    if is_video and video_mdat_before:
-                        layout_detail = f', media payload SHA-256 {video_mdat_before[0][:12]}… unchanged'
+                    if is_video:
+                        layout_detail = f', {remux_note}'
                     elif target_dimensions:
                         layout_detail = f', target {target_dimensions[0]}×{target_dimensions[1]} @ orientation {target_orientation}'
                     detail = f' [{clone_mode}, {len(embedded)} embedded tag(s){chunk_detail}{layout_detail}]'
@@ -1880,6 +1833,9 @@ class RepairWorker(QThread):
                     try:
                         if self.replace_originals and backup and backup.exists() and dest:
                             shutil.copy2(backup, dest)
+                            if dest != source:
+                                shutil.copy2(backup, source)
+                                Path(dest).unlink()
                             cleanup_note = ' Original restored from backup.'
                         elif not self.replace_originals and dest and Path(dest).exists():
                             Path(dest).unlink()

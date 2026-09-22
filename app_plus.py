@@ -44,12 +44,13 @@ def _reserve_video_number() -> int:
 
 def _cleaned_output_path(folder: Path, source: Path) -> Path:
     """Name metadata-repaired safe copies with a _cleaned suffix."""
-    candidate = folder / f"{source.stem}_cleaned{source.suffix}"
+    suffix = '.mov' if core.is_video_path(source) else source.suffix
+    candidate = folder / f"{source.stem}_cleaned{suffix}"
     if not candidate.exists():
         return candidate
     n = 2
     while True:
-        candidate = folder / f"{source.stem}_cleaned_{n}{source.suffix}"
+        candidate = folder / f"{source.stem}_cleaned_{n}{suffix}"
         if not candidate.exists():
             return candidate
         n += 1

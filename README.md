@@ -1,6 +1,18 @@
-# Metadata Repair Tool v2.6.0
+# Metadata Repair Tool v2.8.1
 
-Native Windows desktop tool for repairing image and video metadata from trusted references while keeping destination-specific facts truthful.
+Native Windows desktop tool for repairing image and video metadata from trusted references while keeping destination-specific media facts intact.
+
+## v2.8.1 — clear the FFmpeg video vendor field
+
+The MOV remux now clears the four-byte `FFMP` video sample-entry vendor field to an unspecified value, like the provided `v1.mov` reference. This changes only that field in the MOV header. The app checks the completed file for surviving FFmpeg vendor/encoder metadata and verifies its encoded packets remain unchanged. The absence of that field does not establish that an iPhone recorded the video; the codec bitstream and other container details can still reveal processing.
+
+## v2.8.0 — one-click QuickTime video output
+
+Video targets now produce `.mov` files with a QuickTime `qt` container and Core Media track handler labels. FFmpeg copies encoded streams without re-encoding, while ExifTool transfers the selected Make/Model/Software keys from the video reference. The video path never copies GPS, location accuracy, the reference capture time or playback intent. A post-write audit rejects location and obvious AI provenance tags; a packet-by-packet SHA-256 comparison checks the encoded media stayed intact.
+
+The output does not prove physical iPhone capture. Its actual codec, resolution, frame rate and rotation come from the target. Unrecognised streams or codecs that QuickTime cannot hold cause a clear error rather than a lossy conversion.
+
+Install FFmpeg with `ffmpeg.exe` and `ffprobe.exe` on PATH, or put both beside `app.py` and `build_exe.bat`. The build script includes both executables in the app folder when they are beside the source. No video options need selecting; the normal Process button runs the new pipeline. When Replace originals is selected, the original source is retained in a `.metadatarepair_backup` file.
 
 ## New in v2.6.0 — optional AI image pixel cleanup
 
@@ -118,11 +130,7 @@ The folder is created automatically when a repair is run. You can still choose a
 
 ## Video behaviour
 
-Target video timestamps belong to the **target**, not the reference. The app preserves the target's existing creation/modify/track/media timestamps and never invents reference timestamps when they were absent.
-
-It also preserves the target's codec, resolution, frame rate, duration, rotation, HDR/Dolby Vision signalling, audio layout and encoded streams. The MP4/MOV `mdat` payload is SHA-256 checked before and after repair.
-
-The video reference supplies only the intended reference-owned metadata such as Apple make/model/software, GPS/location accuracy and supported Apple QuickTime keys.
+Video outputs are QuickTime MOV safe copies by default. The remux strips user metadata, timestamps and location tags, then transfers only selected device make/model/software fields from the video reference. The app checks the resulting codec, dimensions, frame rate, rotation and encoded packets. It rejects location and explicit AI provenance metadata if any survive.
 
 ## Image behaviour
 
@@ -142,9 +150,11 @@ Place the official Windows ExifTool files beside the source before building:
 ```text
 metadataInjector\
   app.py
-  app_v26.py
+  app_unified.py
   exiftool.exe
   exiftool_files\
+  ffmpeg.exe
+  ffprobe.exe
   build_exe.bat
 ```
 
@@ -154,7 +164,7 @@ Run:
 build_exe.bat
 ```
 
-The v2.6 build entry point is `app_v26.py`; it imports the existing `app.py` metadata engine. The EXE is produced under:
+The unified build entry point is `app_unified.py`; it imports the `app.py` metadata engine. The EXE is produced under:
 
 ```text
 dist\MetadataRepairTool\MetadataRepairTool.exe

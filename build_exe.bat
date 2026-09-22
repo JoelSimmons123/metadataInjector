@@ -16,6 +16,8 @@ if exist "exiftool.exe" copy /Y "exiftool.exe" "dist\MetadataRepairTool\exiftool
 if exist "exiftool(-k).exe" if not exist "dist\MetadataRepairTool\exiftool.exe" copy /Y "exiftool(-k).exe" "dist\MetadataRepairTool\exiftool(-k).exe" >nul
 if exist "exiftool_files" xcopy /E /I /Y "exiftool_files" "dist\MetadataRepairTool\exiftool_files" >nul
 if exist "good images" xcopy /E /I /Y "good images" "dist\MetadataRepairTool\good images" >nul
+if exist "ffmpeg.exe" copy /Y "ffmpeg.exe" "dist\MetadataRepairTool\ffmpeg.exe" >nul
+if exist "ffprobe.exe" copy /Y "ffprobe.exe" "dist\MetadataRepairTool\ffprobe.exe" >nul
 
 echo Built: dist\MetadataRepairTool\MetadataRepairTool.exe
 exit /b 0
