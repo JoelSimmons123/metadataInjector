@@ -19,7 +19,7 @@ import app as core
 import app_plus as topaz
 import app_v26 as ai
 
-APP_VERSION = "2.8.1"
+APP_VERSION = "2.8.2"
 
 IMAGE_EXTS = set(getattr(core, "IMAGE_EXTS", {
     ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif"

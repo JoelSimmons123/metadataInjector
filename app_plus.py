@@ -440,6 +440,7 @@ class MainWindow(core.MainWindow):
         self.topaz_preset_combo.addItem('1080p60', (1080, True))
         self.topaz_preset_combo.addItem('720p (original FPS)', (720, False))
         self.topaz_preset_combo.addItem('1080p (original FPS)', (1080, False))
+        self.topaz_preset_combo.setCurrentIndex(1)
         self.topaz_preset_combo.currentIndexChanged.connect(self._apply_output_preset)
         grid.addWidget(self.topaz_preset_combo, 2, 3)
 

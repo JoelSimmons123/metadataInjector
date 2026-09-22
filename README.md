@@ -1,4 +1,8 @@
-# Metadata Repair Tool v2.8.1
+# Metadata Repair Tool v2.8.2
+
+## v2.8.2 — upscale preset default
+
+The Topaz output preset now starts at **1080p60**. Other presets remain available.
 
 Native Windows desktop tool for repairing image and video metadata from trusted references while keeping destination-specific media facts intact.
 
