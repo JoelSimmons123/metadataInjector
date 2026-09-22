@@ -1760,7 +1760,10 @@ class RepairWorker(QThread):
                         repaired_meta = extract_metadata(self.exe, str(dest))
                         audit_video_privacy(repaired_meta)
                         _, ffprobe = find_ffmpeg()
-                        verify_streams(str(source if dest != source else backup), str(dest), ffprobe)
+                        if b'Lavc' in Path(dest).read_bytes():
+                            raise RuntimeError('Unrecognised Lavc identifier remains in the processed video.')
+                        verify_streams(str(source if dest != source else backup), str(dest), ffprobe,
+                                       allow_aac_identifier_cleanup=True)
                     else:
                         validate_target_layout_metadata(self.exe, str(dest), target_dimensions, target_orientation)
                         if dst_ext == '.png' and not same_format:

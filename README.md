@@ -1,4 +1,8 @@
-# Metadata Repair Tool v2.8.2
+# Metadata Repair Tool v2.8.3
+
+## v2.8.3 — clear AAC encoder identification
+
+When FFmpeg's version identifier occurs in the known AAC fill-element layout, the video path replaces only those identifier bytes. Packet lengths and timestamps stay the same. Verification compares every video packet, compares audio packets after this exact normalisation, and confirms decoded audio is byte-for-byte identical. Unknown `Lavc` locations fail the job instead of being changed blindly. This removes a visible encoder string; it does not prove camera origin or the absence of invisible watermarking.
 
 ## v2.8.2 — upscale preset default
 
@@ -8,11 +12,11 @@ Native Windows desktop tool for repairing image and video metadata from trusted 
 
 ## v2.8.1 — clear the FFmpeg video vendor field
 
-The MOV remux now clears the four-byte `FFMP` video sample-entry vendor field to an unspecified value, like the provided `v1.mov` reference. This changes only that field in the MOV header. The app checks the completed file for surviving FFmpeg vendor/encoder metadata and verifies its encoded packets remain unchanged. The absence of that field does not establish that an iPhone recorded the video; the codec bitstream and other container details can still reveal processing.
+The MOV remux clears the four-byte `FFMP` video sample-entry vendor field to an unspecified value, like the provided `v1.mov` reference. This changes only that field in the MOV header. The app checks the completed file for surviving FFmpeg vendor/encoder metadata. The absence of that field does not establish that an iPhone recorded the video; the codec bitstream and other container details can still reveal processing.
 
 ## v2.8.0 — one-click QuickTime video output
 
-Video targets now produce `.mov` files with a QuickTime `qt` container and Core Media track handler labels. FFmpeg copies encoded streams without re-encoding, while ExifTool transfers the selected Make/Model/Software keys from the video reference. The video path never copies GPS, location accuracy, the reference capture time or playback intent. A post-write audit rejects location and obvious AI provenance tags; a packet-by-packet SHA-256 comparison checks the encoded media stayed intact.
+Video targets produce `.mov` files with a QuickTime `qt` container and Core Media track handler labels. FFmpeg copies encoded streams without re-encoding, while ExifTool transfers the selected Make/Model/Software keys from the video reference. The video path never copies GPS, location accuracy, the reference capture time or playback intent. A post-write audit rejects location and obvious AI provenance tags; packet verification checks that media changes are limited to the known AAC identification bytes.
 
 The output does not prove physical iPhone capture. Its actual codec, resolution, frame rate and rotation come from the target. Unrecognised streams or codecs that QuickTime cannot hold cause a clear error rather than a lossy conversion.
 
