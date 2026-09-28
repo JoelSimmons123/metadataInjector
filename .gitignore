@@ -48,4 +48,6 @@ Desktop.ini
 
 # IDE
 .vscode/
-.idea/
+.idea/*.swp
+*.v2.*_backup
+last_run.log

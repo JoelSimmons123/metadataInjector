@@ -1760,8 +1760,7 @@ class RepairWorker(QThread):
                         repaired_meta = extract_metadata(self.exe, str(dest))
                         audit_video_privacy(repaired_meta)
                         _, ffprobe = find_ffmpeg()
-                        if b'Lavc' in Path(dest).read_bytes():
-                            raise RuntimeError('Unrecognised Lavc identifier remains in the processed video.')
+                        # v2.10.3: removed unsafe whole-file Lavc scan. Compressed media payload can\n# coincidentally contain the ASCII bytes 'Lavc'; structured checks below remain.\n
                         verify_streams(str(source if dest != source else backup), str(dest), ffprobe,
                                        allow_aac_identifier_cleanup=True)
                     else:

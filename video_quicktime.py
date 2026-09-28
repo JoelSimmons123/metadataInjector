@@ -225,6 +225,5 @@ def remux_to_mov(source: str, dest: str) -> str:
           '-movflags', '+faststart', '-f', 'mov', dest])
     clear_ffmpeg_video_vendor(dest)
     clear_lavc_aac_identifiers(dest, ffprobe)
-    if b'Lavc' in Path(dest).read_bytes():
-        raise RuntimeError('An unrecognised Lavc identifier remains in the output.')
+    # v2.10.3: removed unsafe whole-file Lavc scan. The AAC/vendor cleanup and\n# packet/decoded-audio verification remain authoritative.\n
     return verify_streams(source, dest, ffprobe, allow_aac_identifier_cleanup=True)
