@@ -1,4 +1,4 @@
-"""Metadata Repair Tool v2.11.1 unified entry point.
+"""Metadata Repair Tool v2.10.1 unified entry point.
 
 Combines:
 - app_v26.py: optional image SynthID / invisible-watermark cleanup
@@ -20,9 +20,8 @@ import app as core
 import app_plus as topaz
 import app_v26 as ai
 import caption_integration as captions
-import video_pipeline as pipeline
 
-APP_VERSION = "2.11.1"
+APP_VERSION = "2.10.1"
 
 IMAGE_EXTS = set(getattr(core, "IMAGE_EXTS", {
     ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif"
@@ -59,8 +58,8 @@ def _reference_sort_key(path: Path, kind: str) -> tuple[int, str]:
     return priority.get(ext, 99), path.name.lower()
 
 
-class MainWindow(pipeline.VideoPipelineMixin, captions.CaptionMixin, ai.MainWindow, topaz.MainWindow):
-    """One window with a simple Upscale → Caption → Metadata video pipeline."""
+class MainWindow(captions.CaptionMixin, ai.MainWindow, topaz.MainWindow):
+    """One window containing metadata repair, AI cleanup, Topaz and caption tools."""
 
     def __init__(self):
         super().__init__()
