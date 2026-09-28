@@ -1,4 +1,4 @@
-"""Metadata Repair Tool v2.7.1 unified entry point.
+"""Metadata Repair Tool v2.9.0 unified entry point.
 
 Combines:
 - app_v26.py: optional image SynthID / invisible-watermark cleanup
@@ -19,7 +19,7 @@ import app as core
 import app_plus as topaz
 import app_v26 as ai
 
-APP_VERSION = "2.8.4"
+APP_VERSION = "2.9.0"
 
 IMAGE_EXTS = set(getattr(core, "IMAGE_EXTS", {
     ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif"

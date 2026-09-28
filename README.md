@@ -1,4 +1,35 @@
-# Metadata Repair Tool v2.8.4
+# Metadata Repair Tool v2.9.0
+
+## v2.9.0 — resilient batch processing and end-to-end video workflow
+
+This release focuses on reliability and quality-of-life improvements for large Topaz + metadata-repair batches.
+
+### Video batch workflow
+
+- Added **automatic metadata repair after successful Topaz upscales**.
+- Successful Topaz intermediates are now **deleted only after the repaired output has been created successfully**, leaving the original source video and the final repaired/upscaled video.
+- If an upscale fails, the batch **continues with the remaining videos** instead of stopping.
+- Failed upscale originals are copied into:
+  `Topaz\failed upscale`
+- If metadata repair fails after a successful upscale, the Topaz intermediate is preserved in:
+  `Topaz\failed metadata repair`
+- Added **Retry failed upscales**.
+- Added **Open failed upscale folder**.
+- Added **Stop after current video** so a long batch can be ended cleanly without killing the active encode.
+- Added **skip already-completed originals** using a persistent Topaz manifest.
+- Added a **disk-space warning** before large batches when available free space may be too low.
+- Added cleanup/recovery handling for abandoned or zero-byte Topaz partial files.
+- Added clearer batch progress showing processed, succeeded, failed and skipped counts.
+- Original filenames are tracked alongside generated `vidN_*` names so each final output can be traced back to its source.
+- Added final batch accounting so every queued original is classified as repaired, upscale-failed, metadata-repair-failed or skipped.
+- Added persistent batch reports:
+  - `Topaz\last_topaz_batch_report.txt`
+  - `Topaz\last_topaz_batch_report.json`
+  - `Topaz\topaz_manifest.json`
+
+### Safety behaviour
+
+The cleanup logic only removes app-generated Topaz intermediate files from the expected `Topaz` output folder. Original source videos are never deleted by the successful-repair cleanup step. If the repaired output is missing or metadata repair fails, the intermediate is retained instead of being removed.
 
 ## v2.8.4 — preserve video orientation and shape during Topaz upscale
 
