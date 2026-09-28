@@ -1,4 +1,80 @@
-# Metadata Repair Tool v2.9.0
+# Metadata Repair Tool v2.10.1
+
+## v2.10.1 — automatic video captions + high-quality video pipeline
+
+This release adds local GPU-accelerated subtitles to the existing video workflow and supports both new/raw videos and already-finished upload-ready videos.
+
+### Two captioning paths
+
+Use **Burn captions on Topaz video outputs** when the source still needs Topaz processing:
+
+```text
+original video
+  -> Topaz upscale / optional 60 FPS conversion
+  -> captions
+  -> metadata repair/injection
+  -> final MOV
+```
+
+Use **Caption videos before normal Process / metadata repair (NO UPSCALE)** for videos that are already ready to upload and only need subtitles plus final metadata repair:
+
+```text
+ready video
+  -> captions only
+  -> metadata repair/injection
+  -> final MOV
+```
+
+The no-upscale caption path does not invoke Topaz at all. It is intended for existing finished batches that should not be upscaled or frame-interpolated again.
+
+### Caption behaviour
+
+- Local transcription with `faster-whisper` using word-level timestamps.
+- NVIDIA CUDA / FP16 is preferred automatically; CPU fallback remains available.
+- Default model: `distil-large-v3`.
+- Default short-form style: bold white subtitles with a black outline and yellow current-word highlighting.
+- Captions are grouped into short phrases for vertical social-video readability.
+- Caption rendering keeps the source resolution and frame rate in captions-only mode.
+
+### Video quality changes
+
+- Topaz output encoding quality increased from NVENC CQ18 / P6 to **CQ14 / P7**.
+- When the Topaz FFmpeg build supports the ASS/libass subtitle filter, captions are rendered in the same Topaz encode so there is no additional video generation just for subtitles.
+- If Topaz cannot render ASS subtitles, the app falls back to a separate high-quality caption pass using **NVENC CQ10** where available.
+- The fallback caption pass stream-copies audio with `-c:a copy`, so the audio is not unnecessarily re-encoded.
+- The Topaz path also copies compatible AAC audio directly when possible.
+- Metadata repair remains the final stage so the finished visual file receives the final QuickTime/iPhone metadata treatment.
+
+### Safe-copy behaviour
+
+The captions-only normal-Process path is **Safe copies only**. Existing ready-to-upload originals are not overwritten. Captioned temporary/intermediate files are cleaned up only after the metadata-repaired final output has been created successfully; failed intermediates are preserved for recovery.
+
+### Captioning dependencies
+
+Captioning requires the packages listed in `requirements.txt`, including `faster-whisper` and the NVIDIA CUDA 12 runtime libraries used by CTranslate2.
+
+If this repository already has an older `.venv`, run this once after updating:
+
+```bat
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Then launch normally:
+
+```bat
+run.bat
+```
+
+A working GPU setup should report output similar to:
+
+```text
+Loading distil-large-v3 on CUDA (float16)...
+Transcription device active: CUDA
+```
+
+If the CUDA runtime cannot be loaded in Auto mode, captioning falls back to CPU instead of aborting the entire batch.
+
+> Note: `run.bat` currently creates and installs requirements automatically for a brand-new `.venv`. When updating an existing checkout with an already-created `.venv`, rerun the `pip install -r requirements.txt` command above so newly-added dependencies are installed.
 
 ## v2.9.0 — resilient batch processing and end-to-end video workflow
 
@@ -194,6 +270,8 @@ Place the official Windows ExifTool files beside the source before building:
 metadataInjector\
   app.py
   app_unified.py
+  captioning.py
+  caption_integration.py
   exiftool.exe
   exiftool_files\
   ffmpeg.exe
@@ -201,18 +279,28 @@ metadataInjector\
   build_exe.bat
 ```
 
-Run:
+For an existing source-mode install, update dependencies after pulling a release that changes `requirements.txt`:
+
+```bat
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Then run:
+
+```text
+run.bat
+```
+
+To build the EXE:
 
 ```text
 build_exe.bat
 ```
 
-The unified build entry point is `app_unified.py`; it imports the `app.py` metadata engine. The EXE is produced under:
+The unified build entry point is `app_unified.py`; it imports the existing metadata engine plus the optional Topaz, AI-cleanup and captioning integrations. The EXE is produced under:
 
 ```text
 dist\MetadataRepairTool\MetadataRepairTool.exe
 ```
 
-For source-mode testing, run `run.bat`.
-
-Keep **Safe copies** enabled while testing, especially when AI pixel cleanup is enabled.
+Keep **Safe copies** enabled while testing, especially when AI pixel cleanup or captions-only processing is enabled.

@@ -1,8 +1,9 @@
-"""Metadata Repair Tool v2.9.0 unified entry point.
+"""Metadata Repair Tool v2.10.1 unified entry point.
 
 Combines:
 - app_v26.py: optional image SynthID / invisible-watermark cleanup
 - app_plus.py: Topaz Video enhancement + cleaned-output naming
+- caption_integration.py: optional GPU Whisper captions before metadata repair
 
 Also auto-loads trusted default reference media from a sibling "good images" folder.
 """
@@ -18,8 +19,9 @@ from PySide6.QtWidgets import QApplication
 import app as core
 import app_plus as topaz
 import app_v26 as ai
+import caption_integration as captions
 
-APP_VERSION = "2.9.0"
+APP_VERSION = "2.10.1"
 
 IMAGE_EXTS = set(getattr(core, "IMAGE_EXTS", {
     ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif"
@@ -56,8 +58,8 @@ def _reference_sort_key(path: Path, kind: str) -> tuple[int, str]:
     return priority.get(ext, 99), path.name.lower()
 
 
-class MainWindow(ai.MainWindow, topaz.MainWindow):
-    """One window containing metadata repair, optional AI image cleanup, and Topaz tools."""
+class MainWindow(captions.CaptionMixin, ai.MainWindow, topaz.MainWindow):
+    """One window containing metadata repair, AI cleanup, Topaz and caption tools."""
 
     def __init__(self):
         super().__init__()
