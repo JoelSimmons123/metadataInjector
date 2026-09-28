@@ -1,85 +1,109 @@
-# Metadata Repair Tool v2.10.3
+# Metadata Repair Tool v2.11.1
 
-## v2.10.3 — automatic video captions + Lavc false-positive fix
+## v2.11.1 — simplified and readable video pipeline
 
-This release adds local GPU-accelerated short-form video captioning to the existing Topaz + metadata-repair workflow, while also fixing a rare false-positive video verification failure.
-
-### Automatic video captions
-
-The app now supports **two independent captioning workflows**:
-
-#### 1. Topaz → captions → metadata repair
-
-Use this for new/raw videos that still need enhancement or 60 FPS conversion.
+The normal video workflow is now presented as three stages:
 
 ```text
-source video
-  -> Topaz upscale / optional 60 FPS conversion
-  -> automatic captions
-  -> metadata repair / injection
-  -> final MOV
+Upscale → Caption → Metadata repair
 ```
 
-Enable:
+Choose the stages you want and click **Run selected pipeline**.
 
-- **Burn captions on Topaz video outputs**
+### Common workflows
 
-The app transcribes the processed video with local Whisper and burns the captions before the final metadata-repair stage.
-
-When the Topaz FFmpeg build supports the required subtitle filter, captions can be rendered in the same processing chain instead of requiring an unnecessary additional encode.
-
-#### 2. Captions only → metadata repair
-
-Use this for videos that are already fully upscaled/finished and only need captions added before metadata repair.
+**Fresh/raw video**
 
 ```text
-finished video
-  -> automatic captions
-  -> metadata repair / injection
-  -> final MOV
+Upscale          ON
+Caption          ON
+Metadata repair  ON
 ```
 
-Enable:
+Result:
 
-- **Caption videos before normal Process / metadata repair (NO UPSCALE)**
+```text
+source
+  → Topaz upscale / optional 60 FPS
+  → automatic captions
+  → metadata repair
+  → final MOV
+```
 
-Do **not** run Topaz for this workflow.
+**Already upscaled video that only needs captions + metadata**
 
-This is the intended mode for existing ready-to-upload 1080p/60 FPS videos that should not be upscaled again.
+```text
+Upscale          OFF
+Caption          ON
+Metadata repair  ON
+```
 
-Captions-only mode uses **Safe copies** so the original finished files remain untouched.
+**Already upscaled and captioned video**
 
-### Caption style
+```text
+Upscale          OFF
+Caption          OFF
+Metadata repair  ON
+```
 
-The default caption style is designed for short-form vertical content:
+**Caption only**
 
-- local word-level Whisper timestamps
-- four-word caption groups
+```text
+Upscale          OFF
+Caption          ON
+Metadata repair  OFF
+```
+
+**Upscale only**
+
+```text
+Upscale          ON
+Caption          OFF
+Metadata repair  OFF
+```
+
+### Cleaner UI
+
+The old route-specific caption/Topaz controls still exist internally but are no longer exposed as the primary workflow.
+
+- **Video enhancement** is collapsed by default.
+- **Automatic video captions** is collapsed by default.
+- Use **Topaz settings** when you need to change upscale/FPS/model settings.
+- Use **Caption settings** when you need to change Whisper model, font, words-per-caption, highlighting, etc.
+- Only one advanced panel opens at a time.
+- Larger text/buttons and tighter spacing make the app readable on high-resolution monitors.
+
+The underlying Topaz, captioning, metadata-repair, retry and verification code is unchanged by the UI layer.
+
+---
+
+## Automatic video captions
+
+Captioning uses local `faster-whisper` word-level timestamps.
+
+Default caption styling:
+
+- four-word groups
 - bold white text
 - current spoken word highlighted yellow
 - black outline
 - lower-centre placement
-- original resolution and frame rate retained in captions-only mode
 
 ### GPU transcription
 
-Caption transcription uses `faster-whisper`.
-
-The default behaviour is:
+Default behavior:
 
 ```text
 CUDA float16
-  -> automatic CPU int8 fallback if CUDA cannot be loaded
+  → CPU int8 fallback if CUDA cannot be used
 ```
 
-On a correctly configured NVIDIA system the log should show:
+A working GPU run should show:
 
 ```text
 Loading distil-large-v3 on CUDA (float16)...
 Transcription device active: CUDA
 ```
-
-The project installs the required CUDA runtime libraries into its own Python virtual environment rather than requiring a full system-wide CUDA Toolkit installation.
 
 Current caption dependencies include:
 
@@ -88,234 +112,148 @@ Current caption dependencies include:
 - cuBLAS
 - cuDNN 9
 
-The first run may also download the Whisper model. Subsequent runs reuse the local cache.
-
-### Existing virtual environments
-
-If `.venv` already existed before captioning support was added, install the new dependencies once with:
+If the virtual environment existed before caption support was added, update it once with:
 
 ```bat
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Then launch normally:
+### Video/audio quality
 
-```bat
-run.bat
-```
+Burning captions necessarily re-encodes video because the text becomes part of the frames.
 
-### Caption encoding quality
-
-Captioning necessarily changes video pixels because the text must be burned into the frames.
-
-The caption path therefore uses a deliberately high-quality encode to minimise generational loss:
+The caption workflow therefore uses deliberately high-quality encoding:
 
 - NVIDIA NVENC preferred
-- high-quality preset
-- constant-quality encoding
-- captions-only fallback uses very high quality settings
-- original dimensions and frame rate are retained
-- audio is stream-copied whenever possible rather than being unnecessarily re-encoded
+- high-quality constant-quality settings
+- very-high-quality fallback caption pass
+- resolution/FPS retained when Upscale is disabled
+- audio stream-copy whenever possible
 
-For Topaz processing, the encode quality was also increased from the older lower-quality settings.
-
-### Audio preservation
-
-When the source audio can be copied safely, the caption pipeline uses stream copy rather than:
+AAC audio is copied unchanged where supported instead of unnecessarily doing:
 
 ```text
-AAC -> decode -> AAC re-encode
+AAC → decode → AAC encode
 ```
 
-This avoids unnecessary audio-generation loss.
+### Temporary caption files
 
-The metadata-repair stage retains its existing packet and decoded-audio verification.
-
-### Caption intermediate cleanup
-
-Captioned intermediate files are temporary.
-
-If metadata repair succeeds:
-
-- the intermediate captioned video is removed
-- the final metadata-repaired MOV is retained
-- the original source remains untouched in Safe-copy mode
-
-If metadata repair fails:
-
-- the captioned intermediate is preserved under the failed metadata-repair folder
-- the successful caption work is not discarded
-- the file can be retried later with captioning and Topaz both disabled
-
-For an already-captioned retry:
+When **Caption + Metadata repair** are both enabled:
 
 ```text
-captioned MP4
-  -> metadata repair only
-  -> final MOV
+captioned intermediate
+  → metadata repair
+  → final MOV
 ```
 
-### v2.10.3 Lavc false-positive fix
+After successful metadata repair, the captioned intermediate is deleted.
 
-Previous versions contained two fallback checks that searched the **entire MOV/MP4 file** for the literal ASCII bytes:
+If metadata repair fails, the captioned intermediate is preserved so it can be retried with only **Metadata repair** selected.
+
+---
+
+## v2.10.3 — Lavc false-positive fix
+
+Earlier builds contained fallback checks that searched the entire MOV/MP4 byte stream for the ASCII sequence:
 
 ```text
 Lavc
 ```
 
-That was unsafe because compressed H.264/AAC media payload is arbitrary binary data. A valid video can coincidentally contain those four bytes inside its `mdat` media payload.
+Valid compressed H.264/AAC payload can coincidentally contain those bytes inside `mdat`.
 
-This caused a small number of otherwise valid captioned videos to fail with:
+The unsafe whole-file checks were removed. Targeted verification remains, including:
 
-```text
-An unrecognised Lavc identifier remains in the output.
-```
-
-v2.10.3 removes those unsafe whole-file scans.
-
-The existing targeted verification remains in place, including:
-
-- known AAC `Lavc` encoder-identifier cleanup
+- known AAC `Lavc` encoder identifier cleanup
 - FFmpeg `FFMP` video sample-entry vendor cleanup
 - metadata/vendor inspection
 - encoded packet verification
 - decoded-audio verification
 
-Random `Lavc` bytes inside compressed video/audio data are therefore no longer mistaken for container metadata.
+This prevents valid videos from being rejected merely because compressed media bytes happen to spell `Lavc`.
 
 ---
 
-## v2.9.0 — resilient batch processing and end-to-end video workflow
+## Topaz batch workflow
 
-This release focuses on reliability and quality-of-life improvements for large Topaz + metadata-repair batches.
+The Topaz workflow supports:
 
-### Video batch workflow
+- local Topaz Video enhancement
+- 1080p60 default preset
+- aspect-ratio/orientation preservation
+- automatic continuation through large batches
+- retrying failed upscales
+- stop-after-current behavior
+- skip-already-completed tracking
+- disk-space warnings
+- failure folders
+- automatic metadata repair when selected
+- cleanup of successful intermediates
+- persistent batch accounting/reports
 
-- Added **automatic metadata repair after successful Topaz upscales**.
-- Successful Topaz intermediates are now **deleted only after the repaired output has been created successfully**, leaving the original source video and the final repaired/upscaled video.
-- If an upscale fails, the batch **continues with the remaining videos** instead of stopping.
-- Failed upscale originals are copied into:
-  `Topaz\failed upscale`
-- If metadata repair fails after a successful upscale, the Topaz intermediate is preserved in:
-  `Topaz\failed metadata repair`
-- Added **Retry failed upscales**.
-- Added **Open failed upscale folder**.
-- Added **Stop after current video** so a long batch can be ended cleanly without killing the active encode.
-- Added **skip already-completed originals** using a persistent Topaz manifest.
-- Added a **disk-space warning** before large batches when available free space may be too low.
-- Added cleanup/recovery handling for abandoned or zero-byte Topaz partial files.
-- Added clearer batch progress showing processed, succeeded, failed and skipped counts.
-- Original filenames are tracked alongside generated `vidN_*` names so each final output can be traced back to its source.
-- Added final batch accounting so every queued original is classified as repaired, upscale-failed, metadata-repair-failed or skipped.
-- Added persistent batch reports:
-  - `Topaz\last_topaz_batch_report.txt`
-  - `Topaz\last_topaz_batch_report.json`
-  - `Topaz\topaz_manifest.json`
+Topaz outputs are only deleted after the downstream stage has succeeded.
 
-### Safety behaviour
+---
 
-The cleanup logic only removes app-generated Topaz intermediate files from the expected `Topaz` output folder. Original source videos are never deleted by the successful-repair cleanup step. If the repaired output is missing or metadata repair fails, the intermediate is retained instead of being removed.
+## Metadata repair
 
-## v2.8.4 — preserve video orientation and shape during Topaz upscale
+Video repair produces QuickTime MOV safe copies by default.
 
-The upscale stage reads an actual decoded source frame before choosing its canvas. The 1080p/720p preset sets the shorter side and keeps the input aspect ratio, including square and 4:3 video. For portrait 9:16, 1080p still means exactly 1080×1920. After Topaz finishes, the app decodes its output and rejects/deletes it if the output dimensions differ from those requested.
+The repair stage:
 
-## v2.8.3 — clear AAC encoder identification
+- removes unwanted metadata
+- transfers selected trusted device fields from the video reference
+- preserves the target video's real structural/media properties
+- verifies encoded media after writing
+- rejects unwanted location/AI-provenance metadata
 
-When FFmpeg's version identifier occurs in the known AAC fill-element layout, the video path replaces only those identifier bytes. Packet lengths and timestamps stay the same. Verification compares every video packet, compares audio packets after this exact normalisation, and confirms decoded audio is byte-for-byte identical.
+The target's real resolution, duration, frame rate, codec, rotation, HDR signaling, audio layout and media streams are not cloned from the reference.
 
-## v2.8.2 — upscale preset default
+---
 
-The Topaz output preset starts at **1080p60**. Other presets remain available.
+## Image workflow
 
-## v2.8.1 — clear the FFmpeg video vendor field
+Images support normal metadata repair and optional AI image pixel cleanup.
 
-The MOV remux clears the four-byte `FFMP` video sample-entry vendor field to an unspecified value. The app checks the completed file for surviving FFmpeg vendor/encoder metadata.
-
-## v2.8.0 — one-click QuickTime video output
-
-Video targets produce `.mov` files with a QuickTime `qt` container and Core Media track handler labels. FFmpeg copies encoded streams without re-encoding, while ExifTool transfers selected device make/model/software keys from the video reference.
-
-## v2.6.0 — optional AI image pixel cleanup
-
-The image workflow has an **AI image cleanup** panel. When enabled, image targets are first passed through the separately installed `remove-ai-watermarks` tool, then the existing metadata repair engine runs on the cleaned pixels.
-
-The order is:
+When AI cleanup is enabled:
 
 ```text
-image target
-  -> optional invisible-watermark pixel cleanup
-  -> strip old metadata
-  -> clone trusted image-reference metadata
-  -> restore target dimensions/orientation
-  -> verify repaired metadata
+image
+  → optional invisible-watermark pixel cleanup
+  → metadata repair
+  → final image
 ```
 
-Important behaviour:
+AI image cleanup is intentionally separate from the video pipeline.
 
-- **Off by default.**
-- **Images only.**
-- **Safe copies only.**
-- **SDXL + Z-Image is the recommended default.**
-- **One batch / one model load.**
-- Temporary cleaned files are deleted after metadata repair.
-- Original image dimensions are checked after pixel cleanup.
+### Optional AI scrubber
 
-### Installing the optional AI scrubber
-
-Install separately with `uv`:
+Install with `uv`:
 
 ```powershell
 uv tool install --force "remove-ai-watermarks[qwen-zimage]"
 ```
 
-## v2.5.1 — dual references and AI Fingerprint Audit
+---
 
-Choose one **image reference** and one **video reference**. Mixed batches are routed automatically.
+## AI Fingerprint Audit
 
-### AI Fingerprint Audit
-
-The audit reports:
+The audit can inspect:
 
 - direct AI-related metadata strings
-- possible C2PA / Content Credentials-style metadata markers
-- EXIF, XMP, ICC and MakerNotes presence
+- possible C2PA / Content Credentials markers
+- EXIF/XMP/ICC/MakerNotes presence
 - PNG metadata chunks
-- basic device/software/container information
-- sparse/stripped metadata footprints
+- device/software/container metadata
+- sparse or stripped metadata footprints
 
-The score measures observable metadata/provenance markers only. It is not a probability that media is AI-generated.
+The audit is heuristic. A low score does not prove a file is non-AI.
 
-## Default output folder
-
-Safe-copy mode defaults to a `Repaired` folder beside the running app:
-
-```text
-C:\Tools\MetadataRepairTool\MetadataRepairTool.exe
-C:\Tools\MetadataRepairTool\Repaired\
-```
-
-## Video behaviour
-
-Video outputs are QuickTime MOV safe copies by default.
-
-The repair workflow:
-
-- removes unwanted metadata
-- transfers selected trusted device fields from the video reference
-- preserves the target video's actual structural/media properties
-- verifies encoded streams after writing
-- rejects unwanted location/AI-provenance metadata
-
-## Image behaviour
-
-With AI cleanup **disabled**, image metadata is cloned from the image reference while target-specific layout stays truthful.
-
-With AI cleanup **enabled**, the selected diffusion pipeline intentionally regenerates image pixels first; the same metadata/layout repair and verification rules then run on that cleaned image.
+---
 
 ## Setup
 
-Place the required local tools beside the source before building:
+Core project files:
 
 ```text
 metadataInjector\
@@ -325,23 +263,31 @@ metadataInjector\
   app_v26.py
   captioning.py
   caption_integration.py
+  video_pipeline.py
   video_quicktime.py
-  exiftool.exe
-  exiftool_files\
-  ffmpeg.exe
-  ffprobe.exe
   requirements.txt
   run.bat
   build_exe.bat
+  verify_file.bat
 ```
 
-For source-mode use:
+Local runtime assets may also include:
+
+```text
+exiftool.exe
+exiftool_files\
+ffmpeg.exe
+ffprobe.exe
+good images\
+```
+
+Run from source with:
 
 ```bat
 run.bat
 ```
 
-For a distributable build:
+Build the desktop application with:
 
 ```bat
 build_exe.bat
@@ -349,4 +295,4 @@ build_exe.bat
 
 The unified entry point is `app_unified.py`.
 
-Keep **Safe copies** enabled while testing new video/image processing paths.
+Keep **Safe copies** enabled while testing new processing workflows.

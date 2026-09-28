@@ -1,9 +1,10 @@
-"""Metadata Repair Tool v2.10.1 unified entry point.
+"""Metadata Repair Tool v2.11.1 unified entry point.
 
 Combines:
 - app_v26.py: optional image SynthID / invisible-watermark cleanup
 - app_plus.py: Topaz Video enhancement + cleaned-output naming
-- caption_integration.py: optional GPU Whisper captions before metadata repair
+- caption_integration.py: GPU Whisper captions before metadata repair
+- video_pipeline.py: simple Upscale -> Caption -> Metadata repair workflow UI
 
 Also auto-loads trusted default reference media from a sibling "good images" folder.
 """
@@ -20,8 +21,9 @@ import app as core
 import app_plus as topaz
 import app_v26 as ai
 import caption_integration as captions
+import video_pipeline as pipeline
 
-APP_VERSION = "2.10.1"
+APP_VERSION = "2.11.1"
 
 IMAGE_EXTS = set(getattr(core, "IMAGE_EXTS", {
     ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif"
@@ -58,8 +60,13 @@ def _reference_sort_key(path: Path, kind: str) -> tuple[int, str]:
     return priority.get(ext, 99), path.name.lower()
 
 
-class MainWindow(captions.CaptionMixin, ai.MainWindow, topaz.MainWindow):
-    """One window containing metadata repair, AI cleanup, Topaz and caption tools."""
+class MainWindow(
+    pipeline.VideoPipelineMixin,
+    captions.CaptionMixin,
+    ai.MainWindow,
+    topaz.MainWindow,
+):
+    """One window with the simple Upscale -> Caption -> Metadata video pipeline."""
 
     def __init__(self):
         super().__init__()
@@ -99,7 +106,9 @@ class MainWindow(captions.CaptionMixin, ai.MainWindow, topaz.MainWindow):
                 self.image_ref_preview.setText("")
             else:
                 self.image_ref_preview.setPixmap(QPixmap())
-                self.image_ref_preview.setText("Preview unavailable\n(metadata can still be repaired)")
+                self.image_ref_preview.setText(
+                    "Preview unavailable\n(metadata can still be repaired)"
+                )
 
             self.update_reference_metadata("image")
             loaded.append(f"image: {path.name}")
@@ -110,7 +119,9 @@ class MainWindow(captions.CaptionMixin, ai.MainWindow, topaz.MainWindow):
             self.video_ref_name.setText(path.name)
             self.video_ref_name.setToolTip(str(path))
             self.video_ref_preview.setPixmap(QPixmap())
-            self.video_ref_preview.setText("Video reference selected\npreview unavailable")
+            self.video_ref_preview.setText(
+                "Video reference selected\npreview unavailable"
+            )
             self.update_reference_metadata("video")
             loaded.append(f"video: {path.name}")
 
@@ -118,8 +129,10 @@ class MainWindow(captions.CaptionMixin, ai.MainWindow, topaz.MainWindow):
             self.refresh_target_labels()
             self.update_ready_state()
             self.statusBar().showMessage(
-                "Auto-loaded trusted reference " + ("media" if len(loaded) > 1 else "file")
-                + " from 'good images': " + " • ".join(loaded),
+                "Auto-loaded trusted reference "
+                + ("media" if len(loaded) > 1 else "file")
+                + " from 'good images': "
+                + " • ".join(loaded),
                 10000,
             )
 
