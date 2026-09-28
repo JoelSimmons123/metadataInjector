@@ -94,18 +94,18 @@ QWidget {
     background: #0b1020;
     color: #e8ecf5;
     font-family: "Segoe UI";
-    font-size: 11.5pt;
+    font-size: 10.5pt;
 }
 QMainWindow { background: #0b1020; }
 QLabel#Title {
-    font-size: 27pt;
+    font-size: 25pt;
     font-weight: 800;
     color: #f8fafc;
 }
-QLabel#Subtitle { color: #94a3b8; font-size: 11.5pt; }
-QLabel#SectionTitle { font-size: 13pt; font-weight: 700; color: #f8fafc; }
+QLabel#Subtitle { color: #94a3b8; font-size: 10.5pt; }
+QLabel#SectionTitle { font-size: 12pt; font-weight: 700; color: #f8fafc; }
 QLabel#Muted { color: #8995aa; }
-QLabel#Small { color: #94a3b8; font-size: 10pt; }
+QLabel#Small { color: #94a3b8; font-size: 9pt; }
 QLabel#StatusReady {
     color: #86efac;
     background: #12331f;
@@ -146,7 +146,7 @@ QFrame#StatCard {
     border-radius: 12px;
 }
 QLabel#StatValue { font-size: 19pt; font-weight: 800; color: #f8fafc; }
-QLabel#StatLabel { color: #8794aa; font-size: 10pt; }
+QLabel#StatLabel { color: #8794aa; font-size: 9pt; }
 QLineEdit, QPlainTextEdit, QTableWidget, QListWidget {
     background: #0c1323;
     border: 1px solid #2b3850;
@@ -157,7 +157,7 @@ QLineEdit, QPlainTextEdit, QTableWidget, QListWidget {
 }
 QLineEdit { padding: 9px 10px; }
 QLineEdit:disabled { color: #617086; background: #0b1120; }
-QPlainTextEdit { padding: 8px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 10pt; }
+QPlainTextEdit { padding: 8px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 9pt; }
 QListWidget { padding: 7px; outline: 0; }
 QListWidget::item {
     border: 1px solid transparent;
@@ -172,7 +172,7 @@ QPushButton {
     border: 1px solid #31405c;
     border-radius: 9px;
     color: #eaf0f8;
-    padding: 9px 14px;
+    padding: 8px 13px;
     font-weight: 600;
 }
 QPushButton:hover { background: #202d47; border-color: #475b7f; }
@@ -184,7 +184,7 @@ QPushButton#Primary {
     color: white;
     font-size: 11pt;
     font-weight: 800;
-    padding: 12px 20px;
+    padding: 11px 18px;
 }
 QPushButton#Primary:hover { background: #5b7bf5; }
 QPushButton#Danger { color: #fca5a5; }
@@ -1628,7 +1628,7 @@ class DropList(QListWidget):
         self.setDragDropMode(QListWidget.DropOnly)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setIconSize(QSize(52, 52))
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(270)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         event.acceptProposedAction() if event.mimeData().hasUrls() else event.ignore()
@@ -2038,8 +2038,8 @@ class MainWindow(QMainWindow):
 
         root = QWidget(); self.setCentralWidget(root)
         main = QVBoxLayout(root)
-        main.setContentsMargins(20, 16, 20, 14)
-        main.setSpacing(12)
+        main.setContentsMargins(26, 22, 26, 18)
+        main.setSpacing(16)
 
         # Header
         header = QHBoxLayout()
@@ -2433,6 +2433,19 @@ class MainWindow(QMainWindow):
 
         image_targets = [x for x in self.targets if is_image_path(x)]
         video_targets = [x for x in self.targets if is_video_path(x)]
+
+        if video_targets:
+            response = QMessageBox.question(
+                self, 'Video metadata mode',
+                'Video repair copies writable QuickTime/iPhone device/location metadata such as make/model/software and GPS from your selected video reference. '
+                'The target video\'s own creation/modify/track/media timestamps are preserved and reference dates are never injected.\n\n'
+                'It intentionally keeps each target video\'s real resolution, duration, frame rate, codec, rotation, HDR signalling, audio layout and media tracks. '
+                'Those are structural facts, not metadata that should be cloned from another video.\n\nContinue?',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if response != QMessageBox.Yes:
+                return
 
         if image_targets and image_ref:
             ref_ext = Path(image_ref).suffix.lower()
